@@ -1,51 +1,123 @@
 import { expect, test } from '@playwright/test'
 
-async function nextSlide(page: import('@playwright/test').Page) {
+async function next(page: import('@playwright/test').Page) {
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
-  await page.getByRole('button', { name: 'Go to next slide' }).click()
-  await page.waitForTimeout(450)
+  await page.getByRole('button', { name: 'Go to next slide', exact: true }).click()
+  await page.waitForTimeout(650)
 }
 
-test('Focaus roadshow follows the six-slide interaction path', async ({ page }) => {
+test('eight-slide story, replay, source navigation and calculations work with mouse input', async ({ page }) => {
   await page.goto('/')
-  await expect(page.getByRole('heading', { name: 'Focaus' })).toBeVisible()
+  await expect(page.getByRole('heading', {name: 'Focaus', exact:true})).toBeVisible()
+  await next(page)
+  await page.getByRole('button', {name:'彩排回放',exact:true}).click()
+  await page.getByRole('button', {name:'开始彩排回放',exact:true}).click()
+  await expect(page.getByText('partial · 尚未定稿', {exact:true})).toBeVisible()
+  await expect(page.locator('.asr-transcript-row.is-final')).toHaveCount(1, {timeout: 5000})
+  await page.getByRole('button', {name:/摘录句子/}).first().click()
+  await next(page)
+  await expect(page.getByRole('heading',{name:'原话留下，关键订正由你决定。'})).toBeVisible()
+  await page.getByRole('button', {name:/Sigmoid 的输出是以零为中心的/}).click()
+  await expect(page.getByRole('dialog', {name:'订正建议'})).toBeVisible()
+  await page.getByRole('button', {name:'采纳订正',exact:true}).click()
+  await expect(page.getByText('已采纳 1 处',{exact:true})).toBeVisible()
+  await expect(page.locator('.raw-timeline')).toContainText('它不是 zero-centered')
+  await next(page)
+  await page.getByRole('button', {name:'展开听写链',exact:true}).click()
+  await page.getByRole('button', {name:'展开完整工作区',exact:true}).click()
+  await expect(page.locator('.workspace-pane:visible')).toHaveCount(6)
+  await next(page)
+  await page.getByRole('button', {name:'focaus · 回顾刚刚十分钟',exact:true}).click()
+  await page.getByRole('button', {name:'跟上当前位置 →',exact:true}).click()
+  await expect(page.getByRole('button', {name:'已跟上当前位置 ✓'})).toBeVisible()
+  await expect(page.locator('.classroom-note')).toContainText('Xavier')
+  await next(page)
+  await page.getByRole('button', {name:/原始句 148/}).click()
+  await expect(page.locator('.raw-quote:visible')).toContainText('它不是 zero-centered')
+  await page.getByRole('button', {name:/课件 p.35/}).click()
+  await expect(page.locator('.evidence-page:visible')).toBeVisible()
+  await next(page)
+  await page.getByRole('button', {name:'选择输出 2,2',exact:true}).click()
+  await page.getByRole('button', {name:'下一项乘加',exact:true}).click()
+  await expect(page.locator('.lab-step-bar')).toContainText('输入 (2, 2)')
+  await expect(page.locator('.inspector-value strong')).toHaveText('4')
+  await next(page)
+  await expect(page.getByRole('heading', {name:'本场摘录',exact:true})).toBeVisible()
+  await expect(page.locator('.closing-system-card').last()).toContainText('来源：本场')
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true)
+})
 
-  await nextSlide(page)
-  await page.getByRole('button', { name: /Focaus.*一键跟上/ }).click()
-  await expect(page.getByRole('heading', { name: 'Focaus 10s 认知对齐' })).toBeVisible()
-  await page.getByRole('button', { name: '继续演示' }).click()
-  await page.getByRole('button', { name: '继续演示' }).click()
-  await expect(page.getByText('揭秘 Focaus 如何攻克')).toBeVisible()
+test('live ASR uses provider events only; stopping preserves the final tail and releases audio', async ({page}) => {
+  await page.addInitScript(() => {
+    const stopped = () => { (window as any).__audioReleased = true }
+    Object.defineProperty(navigator, 'mediaDevices', {value:{getUserMedia:async()=>({getTracks:()=>[{stop:stopped}]})}})
+    const connection = () => ({connect(){},disconnect(){}})
+    ;(window as any).AudioContext = class {
+      state = 'running'; destination = {}; audioWorklet = {addModule:async()=>undefined}
+      createMediaStreamSource(){return connection()}
+      createGain(){return {...connection(),gain:{value:0}}}
+      async resume(){}
+      async close(){this.state='closed'}
+    }
+    ;(window as any).AudioWorkletNode = class {
+      port = {onmessage:null as any,postMessage:()=>this.port.onmessage?.({data:{type:'flushed'}})}
+      connect(){} disconnect(){}
+    }
+  })
+  await page.route('**/api/demo/status', route => route.fulfill({json:{configured:true,remainingSeconds:100},headers:{'access-control-allow-origin':'*'}}))
+  await page.routeWebSocket('**/api/demo/asr', ws => {
+    ws.onMessage(message => {
+      if (typeof message !== 'string') return
+      const control = JSON.parse(message)
+      if (control.type === 'start') {
+        ws.send(JSON.stringify({type:'ready'}))
+        ws.send(JSON.stringify({type:'partial',text:'这句是协议验证'}))
+        setTimeout(()=>ws.send(JSON.stringify({type:'final',segmentId:'real-test-1',text:'这句是协议验证返回，不是预置课堂句。',startMs:200,endMs:1400})),500)
+      }
+      if (control.type === 'stop') {
+        ws.send(JSON.stringify({type:'final',segmentId:'tail',text:'停止后的尾句。',startMs:1500,endMs:1800}))
+        ws.send(JSON.stringify({type:'stopped'}))
+      }
+    })
+  })
+  await page.goto('/2')
+  await page.getByRole('button', {name:'开始实时识别',exact:true}).click()
+  await expect(page.locator('.asr-transcript')).toContainText('这句是协议验证返回，不是预置课堂句。')
+  await expect(page.locator('.asr-transcript')).not.toContainText('stuck')
+  await page.getByRole('button', {name:'停止识别',exact:true}).click()
+  await expect(page.locator('.asr-transcript')).toContainText('停止后的尾句。')
+  await expect(page.getByRole('button', {name:'开始实时识别',exact:true})).toBeVisible()
+  expect(await page.evaluate(()=>(window as any).__audioReleased)).toBe(true)
+})
 
-  await nextSlide(page)
-  await expect(page.getByRole('heading', { name: '资料先被理解，语音才有上下文' })).toBeVisible()
-  await page.getByRole('button', { name: '步幅为二' }).click()
-  await expect(page.getByText('建议修改为')).toBeVisible()
-  await page.getByRole('button', { name: '一键替换正文' }).click()
+test('unavailable host reports an error without falling back to fake recognition',async({page})=>{
+  await page.route('**/api/demo/status',route=>route.fulfill({status:503,json:{},headers:{'access-control-allow-origin':'*'}}))
+  await page.goto('/2')
+  await page.getByRole('button',{name:'开始实时识别',exact:true}).click()
+  await expect(page.getByRole('alert')).toContainText('语音宿主暂不可达')
+  await expect(page.locator('.asr-transcript-row.is-final')).toHaveCount(0)
+})
 
-  await nextSlide(page)
-  await expect(page.getByRole('heading', { name: /笔记可以以不同的 level mix/ })).toBeVisible()
-  await page.locator('input[aria-label="中英混合等级"]:visible').fill('4')
-  await expect(page.getByText('Level 4')).toBeVisible()
-  // Slidev's transparent bottom toolbar can cover this low-positioned button at 720px height.
-  await page.getByRole('button', { name: /一键添加至笔记/ }).filter({ visible: true }).press('Enter')
-  await expect(page.getByText('自动生成：训练过程可视化')).toBeVisible()
-  await expect(page.locator('canvas')).toBeVisible()
-
-  await nextSlide(page)
-  await expect(page.getByRole('heading', { name: '每个结论，都能回到它的事实来源' })).toBeVisible()
-  await page.getByRole('button', { name: '原始转写' }).click()
-  await page.getByRole('button', { name: 'ε' }).nth(0).click()
-  await expect(page.getByText(/作用域：公式 1/)).toBeVisible()
-  await page.getByRole('button', { name: 'ε' }).nth(1).click()
-  await expect(page.getByText(/作用域：公式 2/)).toBeVisible()
-
-  await nextSlide(page)
-  await expect(page.getByRole('heading', { name: '一场路演结束，三层材料已经留下' })).toBeVisible()
-  await expect(page.getByRole('heading', { name: '本场路演 · 原始转写' })).toBeVisible()
-  await expect(page.getByRole('heading', { name: '本场路演 · 二次转写' })).toBeVisible()
-  await expect(page.getByRole('heading', { name: '本场路演 · 实时笔记' })).toBeVisible()
-
-  const fitsViewport = await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)
-  expect(fitsViewport).toBe(true)
+test('cancelling before the status response cannot open the microphone later',async({page})=>{
+  await page.addInitScript(()=>{
+    ;(window as any).__micCalls = 0
+    Object.defineProperty(navigator,'mediaDevices',{value:{getUserMedia:async()=>{(window as any).__micCalls++;throw new Error('must not run')}}})
+  })
+  let releaseStatus!: () => void
+  const statusHeld = new Promise<void>(resolve => { releaseStatus = resolve })
+  await page.route('**/api/demo/status',async route=>{
+    await statusHeld
+    await route.fulfill({json:{configured:true,remainingSeconds:100},headers:{'access-control-allow-origin':'*'}})
+  })
+  await page.goto('/2')
+  const statusRequested = page.waitForRequest('**/api/demo/status')
+  await page.getByRole('button',{name:'开始实时识别',exact:true}).click()
+  await statusRequested
+  await page.getByRole('button',{name:'停止识别',exact:true}).click()
+  const statusReturned = page.waitForResponse('**/api/demo/status')
+  releaseStatus()
+  await statusReturned
+  await page.waitForTimeout(200)
+  expect(await page.evaluate(()=>(window as any).__micCalls)).toBe(0)
+  await expect(page.getByRole('button',{name:'开始实时识别',exact:true})).toBeVisible()
 })

@@ -15,26 +15,26 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 
-SLIDE_ROUTE = re.compile(r"^/(\d+)/?$")
+SLIDE_ROUTE = re.compile(r"^/(?:\d+|presenter(?:/(?:\d+|print))?|overview|notes|print)/?$")
 
 
 class DemoHandler(SimpleHTTPRequestHandler):
-    def _slide_route(self) -> tuple[str, str] | None:
+    def _slide_route(self) -> str | None:
         parsed = urlsplit(self.path)
         match = SLIDE_ROUTE.fullmatch(parsed.path)
         if not match:
-            return None
-        slide = match.group(1)
-        if parsed.path.endswith("/"):
-            query = f"?{parsed.query}" if parsed.query else ""
-            self.send_response(302)
-            self.send_header("Location", f"/{slide}{query}")
-            self.end_headers()
             return None
         return "/" + (f"?{parsed.query}" if parsed.query else "")
 
     def _serve(self, method: str) -> None:
         original_path = self.path
+        parsed = urlsplit(original_path)
+        if SLIDE_ROUTE.fullmatch(parsed.path) and parsed.path.endswith("/"):
+            query = f"?{parsed.query}" if parsed.query else ""
+            self.send_response(302)
+            self.send_header("Location", parsed.path.rstrip("/") + query)
+            self.end_headers()
+            return
         rewritten_path = self._slide_route()
         if rewritten_path is not None:
             self.path = rewritten_path
@@ -56,7 +56,7 @@ class DemoHandler(SimpleHTTPRequestHandler):
 def main() -> None:
     parser = argparse.ArgumentParser(description="Serve the Focaus HTML roadshow")
     parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=3032)
+    parser.add_argument("--port", type=int, default=1421)
     parser.add_argument(
         "--directory",
         type=Path,
@@ -72,7 +72,7 @@ def main() -> None:
     handler = partial(DemoHandler, directory=str(directory))
     server = ThreadingHTTPServer((args.host, args.port), handler)
     print(f"Serving {directory}")
-    print(f"Open http://{args.host}:{args.port}/ or /1 through /6")
+    print(f"Open http://{args.host}:{args.port}/ or /1 through /8")
     print("Press Control+C to stop.")
     try:
         server.serve_forever()

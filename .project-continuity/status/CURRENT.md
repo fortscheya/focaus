@@ -1,5 +1,8 @@
 # Current State
 
+## Current Presentation Delivery (2026-10-18)
+- 当前交付已升级为基于第二版 L03 Demo 的 8 页路演，取代下方工具准备与 6 页的先前状态。实时 ASR 入口、1421 启动器、动效、导出和本地验证结果见 [PRESENTATION.md](PRESENTATION.md)。运行中的产品 1422 / 宿主 4319 保持原样，本轮未进行真实音频云识别验收。
+
 ## Active Development
 - 2026-10-18 Demo短期范围：`apps/desktop/src/demo/DemoWorkspace.tsx` 接入 `?demo=1`，覆盖本地麦克风采集和本地 sentence 回放、选段入课件、来源跳转、L08 课件重构示例、2D 卷积对象及二次转写订正。当前可演示链不调用云模型、不上传音频。
 - 2026-10-18 D167–D171：后续开发获授权；G0初始3312e4e、G1共同d9a8cdf6已提交。四个独立Codex App会话和worktree已建立，均请求gpt-6.1-sol/max且工具接受，运行配置字段未独立读回。详见docs/DEVELOPMENT.md。

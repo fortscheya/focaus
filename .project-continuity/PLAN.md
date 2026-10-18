@@ -1,5 +1,8 @@
 # Plan
 
+## Completed: New L03 Presentation (2026-10-18)
+- 已按正在运行的第二版 L03 Demo 重制 8 页路演，接入现有实时 ASR 客户端，增强翻页与页内动效；HTML/PDF/PPTX 已更新并通过本地验证和渲染 QA。实现仅修改 `presentation/`，保留原宿主 Origin/凭据/额度约束，本轮未上传麦克风音频。详见 `status/PRESENTATION.md`；本条取代下方旧 6 页交付状态。
+
 ## Completed: Engineering Documentation (D160)
 - Q1–Q127已回应，D157确认产品共同理解；D160本轮文档授权已完成。项目docs/engineering/含README及六份正文、C01–C06文字契约、V01–V17验收矩阵、U01–U10待验证项、五份启动提示词。
 - 完成文档链接/结构/字段状态/职责/时序/只读文件保护检查；不是机器类型/产品运行验收。无产品/测试代码、依赖安装、服务、密钥读取、模型调用、上传、Git初始化或线程创建。

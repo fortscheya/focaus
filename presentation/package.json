@@ -6,7 +6,7 @@
   "packageManager": "pnpm@11.25.0",
   "scripts": {
     "dev": "slidev --port 3030",
-    "build": "slidev build --base ./",
+    "build": "slidev build --base /",
     "serve": "python3 serve-demo.py",
     "export:pdf": "slidev export --format pdf",
     "export:pptx": "slidev export --format pptx",
