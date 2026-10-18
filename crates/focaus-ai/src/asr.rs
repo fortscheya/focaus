@@ -1036,7 +1036,7 @@ mod tests {
 
     #[test]
     fn late_and_cancelled_results_are_blocked() {
-        let candidate = AsrRawCandidate { task_id: "local".into(), attempt: 1, snapshot_id: "snap".into(), remote_binding: RemoteBinding { provider: "bailian".into(), provider_task_id: "r".into(), connection_epoch: 1, provider_sentence_id: Some("s".into()), local_request_segment_id: "local".into() }, state: AsrRawCandidateState::Final, text: "x".into(), relative_start_ms: 0, relative_end_ms: 1, speaker_ref: None, mapping_revision_id: "map".into() };
+        let candidate = AsrRawCandidate { task_id: "local".into(), attempt: 1, snapshot_id: "snap".into(), remote_binding: RemoteBinding { provider: "bailian".into(), provider_task_id: "r".into(), connection_epoch: 1, provider_sentence_id: Some("s".into()), local_request_segment_id: "local".into() }, state: AsrRawCandidateState::Final, text: "x".into(), relative_start_ms: 0, relative_end_ms: 1, speaker_ref: None, mapping_revision_id: "map-1".into() };
         let mut gate = ResultGate::new("local", 1, "snap", Some(1), Some(1));
         assert_eq!(gate.classify(&candidate), PublishDecision::Accept);
         assert_eq!(gate.classify(&candidate), PublishDecision::Duplicate);
