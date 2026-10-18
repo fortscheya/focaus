@@ -14,6 +14,7 @@ import type {
   EvaluationResult,
   VisualizationEvaluateInput,
 } from '@focaus/contracts';
+import type {MaterialImportAdapter, MaterialImportRequest, MaterialImportResult} from '../material/materialAdapter.ts';
 
 export const CONTRACT_VERSION = '2.0.0' as const;
 export const MATERIAL_FORMAT = 'focaus.material/2.0.0' as const;
@@ -214,6 +215,43 @@ export function createNativeHostAdapter(windowId: string): HostAdapter {
         throw new Error('Native window identity changed before command dispatch.');
       }
       return tauriInvoke<CommandResult>('focaus_command', {command});
+    },
+  };
+}
+
+type NativeMaterialJobHandle = {
+  task_id: string;
+  material_id: string;
+  source_version_id: string;
+  parse_version_id: string;
+  parent_parse_version_id: string | null;
+};
+
+/**
+ * The native material flow is deliberately two phase: the host picker first
+ * owns and copies the original, then the local sidecar converts that managed
+ * source. No filesystem path crosses this bridge.
+ */
+export function createNativeMaterialImportAdapter(): MaterialImportAdapter {
+  return {
+    mode: 'native',
+    async requestMaterialImport(request: MaterialImportRequest): Promise<MaterialImportResult> {
+      try {
+        const job = await tauriInvoke<NativeMaterialJobHandle>('focaus_material_import', {
+          lessonId: request.lessonId,
+          purpose: request.purpose,
+          pages: request.pages,
+        });
+        await tauriInvoke<unknown>('focaus_material_convert', {taskId: job.task_id});
+        return {
+          status: 'accepted',
+          taskId: job.task_id,
+          message: `资料已由宿主托管并完成本地转换任务 ${job.task_id}；正文以事件和 content.get 投影为准。`,
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return {status: 'error', message: `资料导入未完成：${message}`};
+      }
     },
   };
 }
