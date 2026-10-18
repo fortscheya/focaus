@@ -45,18 +45,10 @@ fn parse<T: DeserializeOwned>(v: &Value) -> Result<T> {
 }
 fn unsupported_mutation_message(name: &str) -> Option<&'static str> {
     match name {
-        "content.patch" | "content.undo" => {
-            Some("Native content mutation adapter is not connected")
+        "correction.accept_batch" => {
+            Some("Native correction batch adapter is not connected")
         }
-        "correction.draft"
-        | "correction.accept"
-        | "correction.reject"
-        | "correction.accept_batch" => {
-            Some("Native correction publication adapter is not connected")
-        }
-        "note.reorganize" | "note.add_selection" => {
-            Some("Native note mutation adapter is not connected")
-        }
+        "note.reorganize" => Some("Native note reorganization adapter is not connected"),
         "visualization.request" | "visualization.patch" | "visualization.retry" => {
             Some("Native visualization mutation adapter is not connected")
         }
@@ -257,6 +249,36 @@ impl NativeHost {
             "definition.resolve" => self
                 .store
                 .read(|c| crate::library::resolve_definition(c, &parse(&command.payload)?))?,
+            "content.patch" => {
+                return self.store.command(&window.id, &command, |t| {
+                    crate::library::content_patch(t, &parse(&command.payload)?, Some(&command.command_id))
+                })
+            }
+            "content.undo" => {
+                return self.store.command(&window.id, &command, |t| {
+                    crate::library::content_undo(t, &parse(&command.payload)?, Some(&command.command_id))
+                })
+            }
+            "note.add_selection" => {
+                return self.store.command(&window.id, &command, |t| {
+                    crate::library::note_add_selection(t, &parse(&command.payload)?, Some(&command.command_id))
+                })
+            }
+            "correction.draft" => {
+                return self.store.command(&window.id, &command, |t| {
+                    crate::library::correction_draft(t, &parse(&command.payload)?, Some(&command.command_id))
+                })
+            }
+            "correction.accept" => {
+                return self.store.command(&window.id, &command, |t| {
+                    crate::library::correction_accept(t, &parse(&command.payload)?, Some(&command.command_id))
+                })
+            }
+            "correction.reject" => {
+                return self.store.command(&window.id, &command, |t| {
+                    crate::library::correction_reject(t, &parse(&command.payload)?, Some(&command.command_id))
+                })
+            }
             "resource.read" => {
                 crate::library::resources::read_resource(&self.store, parse(&command.payload)?)?
             }
@@ -807,5 +829,232 @@ impl HostServices for NativeHost {
         input: CatchupDisplayAckInput,
     ) -> HostFuture<'a, CommandResult> {
         Box::pin(async move { self.focaus.display_ack(input) })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::collections::BTreeMap;
+
+    fn command(
+        name: &str,
+        window_id: &str,
+        payload: Value,
+        expected_revisions: BTreeMap<String, String>,
+        idempotency_key: String,
+    ) -> Command {
+        serde_json::from_value(json!({
+            "contract_version":"2.0.0",
+            "command_id":storage::id(),
+            "name":name,
+            "actor":"user",
+            "window_id":window_id,
+            "payload":payload,
+            "idempotency_key":idempotency_key,
+            "expected_revisions":expected_revisions
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn native_host_content_patch_undo_and_idempotency_use_sqlite_revisions() {
+        let path = std::env::temp_dir().join(format!("focaus-ipc-{}", storage::id()));
+        let host = NativeHost::open(&path, crate::INITIAL_MIGRATION).unwrap();
+        let window_id = storage::id();
+        host.bind_window(
+            "main",
+            &window_id,
+            vec![serde_json::from_value(json!({"kind":"global"})).unwrap()],
+        )
+        .unwrap();
+        let course = host
+            .dispatch_webview(
+                "main",
+                command(
+                    "course.create",
+                    &window_id,
+                    json!({"name":"patch integration"}),
+                    BTreeMap::new(),
+                    storage::id(),
+                ),
+            )
+            .unwrap()
+            .result
+            .unwrap();
+        let lesson = host
+            .dispatch_webview(
+                "main",
+                command(
+                    "lesson.create",
+                    &window_id,
+                    json!({
+                        "course_id":course["course_id"],
+                        "title":"patch lesson",
+                        "actual_date":null,
+                        "timezone":"Asia/Shanghai"
+                    }),
+                    BTreeMap::new(),
+                    storage::id(),
+                ),
+            )
+            .unwrap()
+            .result
+            .unwrap();
+        let note_id = storage::id();
+        let object_id = storage::id();
+        let block_id = storage::id();
+        let run_id = storage::id();
+        let body = host
+            .store
+            .write(|t| {
+                let fact_set_revision = storage::id();
+                let body = crate::storage::commit_entity(
+                    t,
+                    &note_id,
+                    "note",
+                    json!({
+                        "note_id":note_id,
+                        "lesson_id":lesson["lesson_id"],
+                        "fact_set_revision":fact_set_revision,
+                        "fact_ids":[],
+                        "objects":[{
+                            "object_id":object_id,
+                            "revision_id":storage::id(),
+                            "type":"text",
+                            "source_refs":[],
+                            "region_ids":[],
+                            "layout":{"bounds":[0,0,1,1],"z_order":0,"group_id":null,"constraints":[]},
+                            "extraction":"native",
+                            "editability":"native",
+                            "status":"complete",
+                            "children":[],
+                            "content":{"block_id":block_id,"runs":[{"element_id":run_id,"text":"hello"}],"level":1}
+                        }],
+                        "revision_id":storage::id()
+                    }),
+                    "content.committed",
+                    json!({"kind":"lesson","lesson_id":lesson["lesson_id"]}),
+                    None,
+                    None,
+                )?;
+                t.execute(
+                    "INSERT INTO notes VALUES(?1,?2,?3,?4)",
+                    rusqlite::params![
+                        note_id,
+                        lesson["lesson_id"].as_str(),
+                        fact_set_revision,
+                        crate::storage::encode(&body["objects"])?
+                    ],
+                )
+                .map_err(storage::sql_error)?;
+                Ok(body)
+            })
+            .unwrap();
+        let base_revision = body["revision_id"].as_str().unwrap().to_owned();
+        let view_id = storage::id();
+        let selector = json!({
+            "kind":"text",
+            "block_id":block_id,
+            "anchor":{
+                "left_element_id":null,
+                "right_element_id":null,
+                "element_ids":[],
+                "scalar_range":{"start":0,"end":5}
+            }
+        });
+        let mut expected = BTreeMap::new();
+        expected.insert(note_id.clone(), base_revision.clone());
+        host.dispatch_webview(
+            "main",
+            command(
+                "edit.begin",
+                &window_id,
+                json!({"lease":{
+                    "view_id":view_id,
+                    "target_id":note_id,
+                    "selectors":[selector],
+                    "lease_epoch":1,
+                    "composition_active":false,
+                    "draft_revision":null
+                }}),
+                expected.clone(),
+                storage::id(),
+            ),
+        )
+        .unwrap();
+        let patch_idempotency = storage::id();
+        let patch = json!({
+            "patch":{
+                "patch_id":storage::id(),
+                "target_id":note_id,
+                "base_revision":base_revision,
+                "operation":"text_replace",
+                "selector":selector,
+                "before_hash":focaus_contracts::canonical_hash(&json!("hello")),
+                "after_value":"world",
+                "author":"user",
+                "intent":"replace",
+                "undo_group_id":storage::id(),
+                "created_at":storage::now()
+            },
+            "lease_epoch":1
+        });
+        let first = host
+            .dispatch_webview(
+                "main",
+                command(
+                    "content.patch",
+                    &window_id,
+                    patch.clone(),
+                    expected.clone(),
+                    patch_idempotency.clone(),
+                ),
+            )
+            .unwrap();
+        let repeated = host
+            .dispatch_webview(
+                "main",
+                command(
+                    "content.patch",
+                    &window_id,
+                    patch,
+                    expected,
+                    patch_idempotency,
+                ),
+            )
+            .unwrap();
+        assert_eq!(first.result, repeated.result);
+        let current_revision = first.result.as_ref().unwrap()["revision_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert_eq!(
+            host.store.head(&note_id).unwrap()["objects"][0]["content"]["runs"][0]["text"],
+            "world"
+        );
+        let mut undo_expected = BTreeMap::new();
+        undo_expected.insert(note_id.clone(), current_revision.clone());
+        let undo = json!({
+            "undo_group_id":first.result.as_ref().unwrap()["undo_group_id"],
+            "current_revision":current_revision
+        });
+        host.dispatch_webview(
+            "main",
+            command(
+                "content.undo",
+                &window_id,
+                undo,
+                undo_expected,
+                storage::id(),
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            host.store.head(&note_id).unwrap()["objects"][0]["content"]["runs"][0]["text"],
+            "hello"
+        );
+        let _ = std::fs::remove_dir_all(&path);
     }
 }

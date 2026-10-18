@@ -4,7 +4,7 @@ pub mod materials;
 pub mod resources;
 pub mod snapshots;
 use crate::storage::{
-    self, commit_entity, decode, emit, encode, head, lifecycle, sql_error, Result,
+    self, check_revision, commit_entity, decode, emit, encode, head, lifecycle, sql_error, Result,
 };
 use focaus_contracts::*;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
@@ -353,6 +353,835 @@ pub(crate) fn resolve_definition(
         check_source(c, source)?;
     }
     storage::value(&definition)
+}
+
+fn entity_body(t: &Transaction<'_>, entity_id: &str) -> Result<(String, Value)> {
+    let kind: String = t
+        .query_row(
+            "SELECT kind FROM entities WHERE entity_id=?1 AND lifecycle='active'",
+            [entity_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(sql_error)?
+        .ok_or_else(|| error(ErrorCode::NotFound, "Editable content unavailable"))?;
+    Ok((kind, head(t, entity_id)?))
+}
+
+fn content_scope(body: &Value) -> Value {
+    body["lesson_id"]
+        .as_str()
+        .map(|lesson| json!({"kind":"lesson","lesson_id":lesson}))
+        .unwrap_or_else(|| json!({"kind":"global"}))
+}
+
+fn find_object<'a>(value: &'a Value, object_id: &str) -> Option<&'a Value> {
+    match value {
+        Value::Object(object) => {
+            if object.get("object_id").and_then(Value::as_str) == Some(object_id) {
+                return Some(value);
+            }
+            object.values().find_map(|child| find_object(child, object_id))
+        }
+        Value::Array(values) => values.iter().find_map(|child| find_object(child, object_id)),
+        _ => None,
+    }
+}
+
+fn find_object_mut<'a>(value: &'a mut Value, object_id: &str) -> Option<&'a mut Value> {
+    if value.get("object_id").and_then(Value::as_str) == Some(object_id) {
+        return Some(value);
+    }
+    match value {
+        Value::Object(object) => object
+            .values_mut()
+            .find_map(|child| find_object_mut(child, object_id)),
+        Value::Array(values) => values
+            .iter_mut()
+            .find_map(|child| find_object_mut(child, object_id)),
+        _ => None,
+    }
+}
+
+fn find_text_content<'a>(value: &'a Value, block_id: &str) -> Option<&'a Value> {
+    match value {
+        Value::Object(object) => {
+            if object
+                .get("content")
+                .and_then(|content| content.get("block_id"))
+                .and_then(Value::as_str)
+                == Some(block_id)
+            {
+                return object.get("content");
+            }
+            object
+                .values()
+                .find_map(|child| find_text_content(child, block_id))
+        }
+        Value::Array(values) => values
+            .iter()
+            .find_map(|child| find_text_content(child, block_id)),
+        _ => None,
+    }
+}
+
+fn find_text_content_mut<'a>(value: &'a mut Value, block_id: &str) -> Option<&'a mut Value> {
+    let matches = value
+        .get("content")
+        .and_then(|content| content.get("block_id"))
+        .and_then(Value::as_str)
+        == Some(block_id);
+    if matches {
+        return value.get_mut("content");
+    }
+    match value {
+        Value::Object(object) => object
+            .values_mut()
+            .find_map(|child| find_text_content_mut(child, block_id)),
+        Value::Array(values) => values
+            .iter_mut()
+            .find_map(|child| find_text_content_mut(child, block_id)),
+        _ => None,
+    }
+}
+
+fn text_selection(body: &Value, selector: &Selector) -> Result<Value> {
+    let Selector::V1(selector) = selector else {
+        return Err(error(
+            ErrorCode::UnsupportedCapability,
+            "Text mutation requires a text selector",
+        ));
+    };
+    let content = find_text_content(body, &selector.block_id)
+        .ok_or_else(|| error(ErrorCode::NotFound, "Text block unavailable"))?;
+    let runs = content["runs"]
+        .as_array()
+        .ok_or_else(|| error(ErrorCode::CorruptAsset, "Text runs unavailable"))?;
+    let text: String = runs
+        .iter()
+        .map(|run| run["text"].as_str().unwrap_or(""))
+        .collect();
+    if !selector.anchor.element_ids.is_empty()
+        && !runs.iter().any(|run| {
+            run["element_id"]
+                .as_str()
+                .is_some_and(|id| selector.anchor.element_ids.iter().any(|wanted| wanted == id))
+        })
+    {
+        return Err(error(ErrorCode::StaleInput, "Text selector elements changed"));
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let start = selector.anchor.scalar_range.start as usize;
+    let end = selector.anchor.scalar_range.end as usize;
+    if start > end || end > chars.len() {
+        return Err(error(ErrorCode::StaleInput, "Text selector range changed"));
+    }
+    Ok(Value::String(chars[start..end].iter().collect()))
+}
+
+fn object_item(body: &Value, selector: &Selector, collection: &str, id_key: &str) -> Result<Value> {
+    let Selector::V3(selector) = selector else {
+        return Err(error(
+            ErrorCode::UnsupportedCapability,
+            "Structured mutation requires an object selector",
+        ));
+    };
+    let item_id = selector
+        .element_ids
+        .first()
+        .ok_or_else(|| error(ErrorCode::InvalidArgument, "Structured item selector required"))?;
+    let object = find_object(body, &selector.object_id)
+        .ok_or_else(|| error(ErrorCode::NotFound, "Structured object unavailable"))?;
+    object["content"][collection]
+        .as_array()
+        .and_then(|items| {
+            items
+                .iter()
+                .find(|item| item[id_key].as_str() == Some(item_id.as_str()))
+        })
+        .cloned()
+        .ok_or_else(|| error(ErrorCode::NotFound, "Structured item unavailable"))
+}
+
+fn visualization_parameters(body: &Value, selector: &Selector) -> Result<Value> {
+    let Selector::V3(selector) = selector else {
+        return Err(error(
+            ErrorCode::UnsupportedCapability,
+            "Parameter mutation requires an object selector",
+        ));
+    };
+    let object = if body["object_id"].as_str() == Some(selector.object_id.as_str()) {
+        body
+    } else {
+        find_object(body, &selector.object_id)
+            .ok_or_else(|| error(ErrorCode::NotFound, "Visualization object unavailable"))?
+    };
+    let parameters = object["parameters"]
+        .as_object()
+        .or_else(|| object["content"]["parameters"].as_object())
+        .ok_or_else(|| error(ErrorCode::UnsupportedCapability, "Visualization parameters unavailable"))?;
+    Ok(Value::Object(parameters.clone()))
+}
+
+fn patch_before_value(body: &Value, patch: &UserPatch) -> Result<Value> {
+    match patch.operation {
+        UserPatchOperation::TextInsert
+        | UserPatchOperation::TextDelete
+        | UserPatchOperation::TextReplace => text_selection(body, &patch.selector),
+        UserPatchOperation::CellSet => object_item(body, &patch.selector, "cells", "cell_id"),
+        UserPatchOperation::NodeSet => object_item(body, &patch.selector, "nodes", "node_id"),
+        UserPatchOperation::EdgeSet => object_item(body, &patch.selector, "edges", "edge_id"),
+        UserPatchOperation::ParameterSet => visualization_parameters(body, &patch.selector),
+        _ => Err(error(
+            ErrorCode::UnsupportedCapability,
+            "This content patch operation is not connected",
+        )),
+    }
+}
+
+fn apply_text_patch(body: &mut Value, patch: &UserPatch) -> Result<()> {
+    let Selector::V1(selector) = &patch.selector else {
+        return Err(error(ErrorCode::UnsupportedCapability, "Text selector required"));
+    };
+    let content = find_text_content_mut(body, &selector.block_id)
+        .ok_or_else(|| error(ErrorCode::NotFound, "Text block unavailable"))?;
+    let runs = content["runs"]
+        .as_array_mut()
+        .ok_or_else(|| error(ErrorCode::CorruptAsset, "Text runs unavailable"))?;
+    if runs.len() != 1 {
+        return Err(error(
+            ErrorCode::UnsupportedCapability,
+            "Multi-run text mutation is not connected",
+        ));
+    }
+    let old = runs[0]["text"]
+        .as_str()
+        .ok_or_else(|| error(ErrorCode::CorruptAsset, "Text run unavailable"))?;
+    if !selector.anchor.element_ids.is_empty()
+        && runs[0]["element_id"].as_str().is_none_or(|id| {
+            !selector.anchor.element_ids.iter().any(|wanted| wanted == id)
+        })
+    {
+        return Err(error(ErrorCode::StaleInput, "Text selector elements changed"));
+    }
+    let chars: Vec<char> = old.chars().collect();
+    let start = selector.anchor.scalar_range.start as usize;
+    let end = selector.anchor.scalar_range.end as usize;
+    if start > end || end > chars.len() {
+        return Err(error(ErrorCode::StaleInput, "Text selector range changed"));
+    }
+    let replacement = match patch.operation {
+        UserPatchOperation::TextInsert => {
+            if start != end {
+                return Err(error(ErrorCode::InvalidArgument, "Text insert range must be empty"));
+            }
+            patch
+                .after_value
+                .as_str()
+                .ok_or_else(|| error(ErrorCode::InvalidArgument, "Text insert value required"))?
+        }
+        UserPatchOperation::TextDelete => "",
+        UserPatchOperation::TextReplace => patch
+            .after_value
+            .as_str()
+            .ok_or_else(|| error(ErrorCode::InvalidArgument, "Text replacement value required"))?,
+        _ => unreachable!(),
+    };
+    let mut next = String::new();
+    next.extend(chars[..start].iter());
+    next.push_str(replacement);
+    next.extend(chars[end..].iter());
+    runs[0]["text"] = json!(next);
+    Ok(())
+}
+
+fn apply_structured_patch(body: &mut Value, patch: &UserPatch, collection: &str, id_key: &str, allowed: &[&str]) -> Result<()> {
+    let Selector::V3(selector) = &patch.selector else {
+        return Err(error(ErrorCode::UnsupportedCapability, "Object selector required"));
+    };
+    let item_id = selector
+        .element_ids
+        .first()
+        .ok_or_else(|| error(ErrorCode::InvalidArgument, "Structured item selector required"))?;
+    let object = find_object_mut(body, &selector.object_id)
+        .ok_or_else(|| error(ErrorCode::NotFound, "Structured object unavailable"))?;
+    let item = object["content"][collection]
+        .as_array_mut()
+        .and_then(|items| items.iter_mut().find(|item| item[id_key].as_str() == Some(item_id)))
+        .ok_or_else(|| error(ErrorCode::NotFound, "Structured item unavailable"))?;
+    let updates = patch
+        .after_value
+        .as_object()
+        .ok_or_else(|| error(ErrorCode::InvalidArgument, "Structured patch object required"))?;
+    for key in updates.keys() {
+        if !allowed.contains(&key.as_str()) {
+            return Err(error(ErrorCode::InvalidArgument, "Structured patch field is not editable"));
+        }
+    }
+    for (key, value) in updates {
+        item[key] = value.clone();
+    }
+    Ok(())
+}
+
+fn apply_parameter_patch(body: &mut Value, patch: &UserPatch) -> Result<()> {
+    let Selector::V3(selector) = &patch.selector else {
+        return Err(error(ErrorCode::UnsupportedCapability, "Object selector required"));
+    };
+    let object = if body["object_id"].as_str() == Some(selector.object_id.as_str()) {
+        body
+    } else {
+        find_object_mut(body, &selector.object_id)
+            .ok_or_else(|| error(ErrorCode::NotFound, "Visualization object unavailable"))?
+    };
+    let parameters = if object.get("parameters").is_some() {
+        object
+            .get_mut("parameters")
+            .ok_or_else(|| error(ErrorCode::UnsupportedCapability, "Visualization parameters unavailable"))?
+    } else {
+        object["content"].get_mut("parameters").ok_or_else(|| {
+            error(ErrorCode::UnsupportedCapability, "Visualization parameters unavailable")
+        })?
+    };
+    let parameters = parameters
+        .as_object_mut()
+        .ok_or_else(|| error(ErrorCode::InvalidResult, "Visualization parameters are not an object"))?;
+    let update = patch
+        .after_value
+        .as_object()
+        .ok_or_else(|| error(ErrorCode::InvalidArgument, "Parameter patch object required"))?;
+    if let (Some(path), Some(value)) = (update.get("path").and_then(Value::as_str), update.get("value")) {
+        if path.is_empty() || path.contains('.') {
+            return Err(error(ErrorCode::InvalidArgument, "Only direct parameter paths are editable"));
+        }
+        parameters.insert(path.into(), value.clone());
+    } else {
+        for (key, value) in update {
+            if key == "path" || key == "value" {
+                continue;
+            }
+            parameters.insert(key.clone(), value.clone());
+        }
+    }
+    Ok(())
+}
+
+fn apply_user_patch(body: &mut Value, patch: &UserPatch) -> Result<()> {
+    match patch.operation {
+        UserPatchOperation::TextInsert
+        | UserPatchOperation::TextDelete
+        | UserPatchOperation::TextReplace => apply_text_patch(body, patch),
+        UserPatchOperation::CellSet => apply_structured_patch(
+            body,
+            patch,
+            "cells",
+            "cell_id",
+            &["value", "unit", "formula", "status"],
+        ),
+        UserPatchOperation::NodeSet => {
+            apply_structured_patch(body, patch, "nodes", "node_id", &["label", "x", "y"])
+        }
+        UserPatchOperation::EdgeSet => apply_structured_patch(
+            body,
+            patch,
+            "edges",
+            "edge_id",
+            &["from_node_id", "to_node_id", "directed", "label", "status"],
+        ),
+        UserPatchOperation::ParameterSet => apply_parameter_patch(body, patch),
+        _ => Err(error(
+            ErrorCode::UnsupportedCapability,
+            "This content patch operation is not connected",
+        )),
+    }
+}
+
+fn require_edit_lease(t: &Transaction<'_>, patch: &UserPatch, lease_epoch: u64) -> Result<()> {
+    let mut q = t
+        .prepare("SELECT selectors_json,lease_epoch FROM edit_leases WHERE target_id=?1")
+        .map_err(sql_error)?;
+    for row in q
+        .query_map([&patch.target_id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, u64>(1)?)))
+        .map_err(sql_error)?
+    {
+        let (selectors, epoch) = row.map_err(sql_error)?;
+        if epoch == lease_epoch {
+            let selectors: Vec<Selector> = decode(&selectors)?;
+            if selectors.iter().any(|selector| intersects(selector, &patch.selector)) {
+                return Ok(());
+            }
+        }
+    }
+    Err(error(
+        ErrorCode::EditProtected,
+        "Matching edit lease is required",
+    ))
+}
+
+fn sync_projection(t: &Transaction<'_>, kind: &str, entity_id: &str, body: &Value) -> Result<()> {
+    match kind {
+        "note" => {
+            t.execute(
+                "UPDATE notes SET fact_set_revision=?2,object_graph_json=?3 WHERE note_id=?1",
+                params![
+                    entity_id,
+                    body["fact_set_revision"].as_str(),
+                    encode(&body["objects"])?
+                ],
+            )
+            .map_err(sql_error)?;
+        }
+        "secondary_segment" => {
+            t.execute(
+                "UPDATE secondary_segments SET revision_id=?2,raw_refs_json=?3,ordered_spans_json=?4,text=?5,generation_revision=?6 WHERE secondary_id=?1",
+                params![
+                    entity_id,
+                    body["revision_id"].as_str(),
+                    encode(&body["raw_refs"])? ,
+                    encode(&body["ordered_spans"])? ,
+                    body["text"].as_str(),
+                    body["generation_revision"].as_str()
+                ],
+            )
+            .map_err(sql_error)?;
+        }
+        _ => (),
+    }
+    Ok(())
+}
+
+pub(crate) fn content_patch(
+    t: &Transaction<'_>,
+    input: &ContentPatchInput,
+    cause: Option<&str>,
+) -> Result<Value> {
+    let patch = &input.patch;
+    if patch.author != "user" {
+        return Err(error(ErrorCode::PermissionDenied, "Only user patches are accepted"));
+    }
+    require_edit_lease(t, patch, input.lease_epoch)?;
+    let (kind, mut body) = entity_body(t, &patch.target_id)?;
+    if ["raw_utterance", "audio_span", "material", "material_region"].contains(&kind.as_str()) {
+        return Err(error(
+            ErrorCode::EditProtected,
+            "Original evidence layers are immutable",
+        ));
+    }
+    check_revision(t, &patch.target_id, &patch.base_revision)?;
+    let before = patch_before_value(&body, patch)?;
+    if canonical_hash(&before) != patch.before_hash {
+        return Err(error(ErrorCode::StaleInput, "Patch before value changed"));
+    }
+    apply_user_patch(&mut body, patch)?;
+    let scope = content_scope(&body);
+    let changed = commit_entity(
+        t,
+        &patch.target_id,
+        &kind,
+        body,
+        "content.committed",
+        scope,
+        cause,
+        None,
+    )?;
+    sync_projection(t, &kind, &patch.target_id, &changed)?;
+    let operation = storage::value(&patch.operation)?
+        .as_str()
+        .unwrap_or("")
+        .to_owned();
+    t.execute(
+        "INSERT INTO user_patches VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+        params![
+            patch.patch_id,
+            patch.target_id,
+            patch.base_revision,
+            encode(&patch.selector)?,
+            patch.before_hash,
+            operation,
+            encode(&patch.after_value)?,
+            patch.intent,
+            patch.undo_group_id,
+            patch.created_at
+        ],
+    )
+    .map_err(sql_error)?;
+    Ok(json!({
+        "target_id": patch.target_id,
+        "revision_id": changed["revision_id"],
+        "undo_group_id": patch.undo_group_id
+    }))
+}
+
+pub(crate) fn content_undo(
+    t: &Transaction<'_>,
+    input: &ContentUndoInput,
+    cause: Option<&str>,
+) -> Result<Value> {
+    let patch: (String, String) = t
+        .query_row(
+            "SELECT target_id,base_revision FROM user_patches WHERE undo_group_id=?1 ORDER BY rowid DESC LIMIT 1",
+            [&input.undo_group_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+        .map_err(sql_error)?
+        .ok_or_else(|| error(ErrorCode::NotFound, "Undo group unavailable"))?;
+    check_revision(t, &patch.0, &input.current_revision)?;
+    let parent: String = t
+        .query_row(
+            "SELECT parent_revision_id FROM revision_parents WHERE revision_id=?1 AND parent_revision_id=?2",
+            params![input.current_revision, patch.1],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(sql_error)?
+        .ok_or_else(|| error(ErrorCode::Conflict, "Undo base is no longer the current parent"))?;
+    let (kind, body): (String, String) = t
+        .query_row(
+            "SELECT e.kind,r.body_json FROM entities e JOIN revisions r ON r.revision_id=?2 WHERE e.entity_id=?1 AND r.entity_id=e.entity_id",
+            params![patch.0, parent],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .map_err(sql_error)?;
+    let body: Value = decode(&body)?;
+    let scope = content_scope(&body);
+    let changed = commit_entity(
+        t,
+        &patch.0,
+        &kind,
+        body,
+        "content.committed",
+        scope,
+        cause,
+        None,
+    )?;
+    sync_projection(t, &kind, &patch.0, &changed)?;
+    Ok(json!({
+        "target_id": patch.0,
+        "revision_id": changed["revision_id"],
+        "undo_group_id": input.undo_group_id
+    }))
+}
+
+fn clone_note_object(value: &Value) -> Value {
+    let mut cloned = value.clone();
+    fn rewrite(value: &mut Value) {
+        match value {
+            Value::Object(object) => {
+                for key in ["object_id", "element_id", "block_id", "revision_id"] {
+                    if object.get(key).and_then(Value::as_str).is_some() {
+                        object.insert(key.into(), json!(storage::id()));
+                    }
+                }
+                for (key, child) in object.iter_mut() {
+                    if key != "source_refs" {
+                        rewrite(child);
+                    }
+                }
+            }
+            Value::Array(values) => values.iter_mut().for_each(rewrite),
+            _ => (),
+        }
+    }
+    rewrite(&mut cloned);
+    cloned
+}
+
+pub(crate) fn note_add_selection(
+    t: &Transaction<'_>,
+    input: &NoteAddSelectionInput,
+    cause: Option<&str>,
+) -> Result<Value> {
+    if input.object_ids.is_empty() || input.sources.is_empty() {
+        return Err(error(ErrorCode::InvalidArgument, "Selection sources and objects are required"));
+    }
+    let mut note = head(t, &input.note_id)?;
+    if note["note_id"].as_str() != Some(input.note_id.as_str()) {
+        return Err(error(ErrorCode::CorruptAsset, "Note identity mismatch"));
+    }
+    validate("Note", &note)?;
+    for source in &input.sources {
+        check_source(t, source)?;
+    }
+    let objects = note["objects"]
+        .as_array_mut()
+        .ok_or_else(|| error(ErrorCode::CorruptAsset, "Note object graph unavailable"))?;
+    let mut additions = Vec::new();
+    for object_id in &input.object_ids {
+        if objects
+            .iter()
+            .any(|object| object["object_id"].as_str() == Some(object_id.as_str()))
+        {
+            return Err(error(ErrorCode::Conflict, "Selected object is already in the note"));
+        }
+        let mut source_object = None;
+        for source in &input.sources {
+            if let Ok(body) = head(t, &source.entity_id) {
+                if let Some(object) = find_object(&body, object_id) {
+                    source_object = Some(object.clone());
+                    break;
+                }
+            }
+        }
+        let mut object = clone_note_object(&source_object.ok_or_else(|| {
+            error(ErrorCode::NotFound, "Selected source object unavailable")
+        })?);
+        let refs = object["source_refs"]
+            .as_array_mut()
+            .ok_or_else(|| error(ErrorCode::CorruptAsset, "Selected object lacks source refs"))?;
+        for source in &input.sources {
+            let value = storage::value(source)?;
+            if !refs.contains(&value) {
+                refs.push(value);
+            }
+        }
+        for source in source_refs_in(&object)? {
+            check_source(t, &source)?;
+        }
+        let _: MaterialObject = serde_json::from_value(object.clone()).map_err(|_| {
+            error(ErrorCode::InvalidResult, "Selected object does not match the object contract")
+        })?;
+        additions.push(object.clone());
+        objects.push(object);
+    }
+    validate("Note", &note)?;
+    let scope = content_scope(&note);
+    let changed = commit_entity(
+        t,
+        &input.note_id,
+        "note",
+        note,
+        "content.committed",
+        scope,
+        cause,
+        None,
+    )?;
+    sync_projection(t, "note", &input.note_id, &changed)?;
+    Ok(json!({
+        "note_id": input.note_id,
+        "revision_id": changed["revision_id"],
+        "object_ids": additions.iter().filter_map(|object| object["object_id"].as_str()).collect::<Vec<_>>()
+    }))
+}
+
+fn secondary_scope(t: &Transaction<'_>, secondary_id: &str) -> Result<Value> {
+    let lesson: Option<String> = t
+        .query_row(
+            "SELECT l.lesson_id FROM secondary_segments s JOIN recording_sessions r ON r.recording_id=s.recording_id LEFT JOIN lessons l ON l.lesson_id=r.lesson_id WHERE s.secondary_id=?1",
+            [secondary_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(sql_error)?
+        .flatten();
+    Ok(lesson
+        .map(|lesson| json!({"kind":"lesson","lesson_id":lesson}))
+        .unwrap_or_else(|| json!({"kind":"global"})))
+}
+
+fn correction_data(
+    t: &Transaction<'_>,
+    suggestion_id: &str,
+) -> Result<(String, CorrectionSuggestion, Value)> {
+    let (secondary_id, body, state): (String, String, String) = t
+        .query_row(
+            "SELECT secondary_id,body_json,state FROM correction_suggestions WHERE suggestion_id=?1",
+            [suggestion_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()
+        .map_err(sql_error)?
+        .ok_or_else(|| error(ErrorCode::NotFound, "Correction suggestion unavailable"))?;
+    let suggestion: CorrectionSuggestion = decode(&body)?;
+    if suggestion.suggestion_id != suggestion_id || storage::value(&suggestion.state)?.as_str() != Some(state.as_str()) {
+        return Err(error(ErrorCode::CorruptAsset, "Correction suggestion index mismatch"));
+    }
+    let secondary = head(t, &secondary_id)?;
+    if suggestion.secondary_id != secondary_id {
+        return Err(error(ErrorCode::CorruptAsset, "Correction secondary identity mismatch"));
+    }
+    validate("SecondarySegment", &secondary)?;
+    Ok((secondary_id, suggestion, secondary))
+}
+
+fn update_suggestion_body(body: &mut Value, suggestion: &CorrectionSuggestion) -> Result<()> {
+    let suggestions = body["suggestions"]
+        .as_array_mut()
+        .ok_or_else(|| error(ErrorCode::CorruptAsset, "Secondary suggestions unavailable"))?;
+    let target = suggestions
+        .iter_mut()
+        .find(|candidate| candidate["suggestion_id"].as_str() == Some(suggestion.suggestion_id.as_str()))
+        .ok_or_else(|| error(ErrorCode::NotFound, "Suggestion is not present in secondary revision"))?;
+    *target = storage::value(suggestion)?;
+    Ok(())
+}
+
+fn check_secondary_sources(t: &Transaction<'_>, secondary: &Value) -> Result<()> {
+    let raw_refs: Vec<SourceRef> = serde_json::from_value(secondary["raw_refs"].clone())
+        .map_err(|_| error(ErrorCode::CorruptAsset, "Secondary source refs are malformed"))?;
+    for source in &raw_refs {
+        check_source(t, source)?;
+    }
+    Ok(())
+}
+
+fn replace_secondary_text(
+    body: &mut Value,
+    suggestion: &CorrectionSuggestion,
+    final_text: &str,
+) -> Result<()> {
+    let text = body["text"]
+        .as_str()
+        .ok_or_else(|| error(ErrorCode::CorruptAsset, "Secondary text unavailable"))?;
+    let chars: Vec<char> = text.chars().collect();
+    let start = suggestion.anchor.scalar_range.start as usize;
+    let end = suggestion.anchor.scalar_range.end as usize;
+    if start > end || end > chars.len() {
+        return Err(error(ErrorCode::StaleInput, "Correction anchor changed"));
+    }
+    let original: String = chars[start..end].iter().collect();
+    if original != suggestion.original_text {
+        return Err(error(ErrorCode::StaleInput, "Correction original text changed"));
+    }
+    let mut next = String::new();
+    next.extend(chars[..start].iter());
+    next.push_str(final_text);
+    next.extend(chars[end..].iter());
+    body["text"] = json!(next);
+    Ok(())
+}
+
+fn commit_correction(
+    t: &Transaction<'_>,
+    secondary_id: &str,
+    body: Value,
+    suggestion: &CorrectionSuggestion,
+    cause: Option<&str>,
+) -> Result<Value> {
+    validate("SecondarySegment", &body)?;
+    let changed = commit_entity(
+        t,
+        secondary_id,
+        "secondary_segment",
+        body,
+        "content.committed",
+        secondary_scope(t, secondary_id)?,
+        cause,
+        None,
+    )?;
+    sync_projection(t, "secondary_segment", secondary_id, &changed)?;
+    t.execute(
+        "UPDATE correction_suggestions SET body_json=?2,state=?3,source_revision=?4 WHERE suggestion_id=?1",
+        params![
+            suggestion.suggestion_id,
+            encode(suggestion)?,
+            storage::value(&suggestion.state)?.as_str().unwrap_or("pending"),
+            suggestion.source_revision
+        ],
+    )
+    .map_err(sql_error)?;
+    Ok(json!({
+        "secondary_id": secondary_id,
+        "revision_id": changed["revision_id"],
+        "suggestion_id": suggestion.suggestion_id,
+        "state": storage::value(&suggestion.state)?
+    }))
+}
+
+pub(crate) fn correction_draft(
+    t: &Transaction<'_>,
+    input: &CorrectionDraftInput,
+    _cause: Option<&str>,
+) -> Result<Value> {
+    let (secondary_id, mut suggestion, secondary) = correction_data(t, &input.suggestion_id)?;
+    if suggestion.state != CorrectionSuggestionState::Pending {
+        return Err(error(ErrorCode::Conflict, "Correction suggestion is no longer pending"));
+    }
+    if secondary["revision_id"].as_str() != Some(suggestion.source_revision.as_str()) {
+        return Err(error(ErrorCode::StaleInput, "Correction source revision changed"));
+    }
+    check_secondary_sources(t, &secondary)?;
+    if input.composition_active {
+        return Ok(json!({"saved":false,"composition_active":true}));
+    }
+    suggestion.suggested_text = input.draft.clone();
+    t.execute(
+        "UPDATE correction_suggestions SET body_json=?2 WHERE suggestion_id=?1",
+        params![suggestion.suggestion_id, encode(&suggestion)?],
+    )
+    .map_err(sql_error)?;
+    Ok(json!({
+        "secondary_id": secondary_id,
+        "revision_id": secondary["revision_id"],
+        "suggestion_id": suggestion.suggestion_id,
+        "state": storage::value(&suggestion.state)?,
+        "saved": true
+    }))
+}
+
+fn correction_commit(
+    t: &Transaction<'_>,
+    suggestion_id: &str,
+    base_revision: &str,
+    final_text: &str,
+    accept: bool,
+    cause: Option<&str>,
+) -> Result<Value> {
+    let (secondary_id, mut suggestion, mut secondary) = correction_data(t, suggestion_id)?;
+    if suggestion.state != CorrectionSuggestionState::Pending {
+        return Err(error(ErrorCode::Conflict, "Correction suggestion is no longer pending"));
+    }
+    if secondary["revision_id"].as_str() != Some(base_revision)
+        || suggestion.source_revision != base_revision
+    {
+        return Err(error(ErrorCode::StaleInput, "Correction base revision changed"));
+    }
+    check_secondary_sources(t, &secondary)?;
+    if accept {
+        if suggestion.semantic_risk == CorrectionSuggestionSemanticRisk::Critical {
+            return Err(error(
+                ErrorCode::UnsupportedCapability,
+                "Critical correction confirmation is not represented by the current contract",
+            ));
+        }
+        replace_secondary_text(&mut secondary, &suggestion, final_text)?;
+        suggestion.suggested_text = final_text.into();
+        suggestion.state = CorrectionSuggestionState::Accepted;
+    } else {
+        suggestion.state = CorrectionSuggestionState::Rejected;
+    }
+    update_suggestion_body(&mut secondary, &suggestion)?;
+    commit_correction(t, &secondary_id, secondary, &suggestion, cause)
+}
+
+pub(crate) fn correction_accept(
+    t: &Transaction<'_>,
+    input: &CorrectionAcceptInput,
+    cause: Option<&str>,
+) -> Result<Value> {
+    correction_commit(
+        t,
+        &input.suggestion_id,
+        &input.base_revision,
+        &input.final_text,
+        true,
+        cause,
+    )
+}
+
+pub(crate) fn correction_reject(
+    t: &Transaction<'_>,
+    input: &CorrectionRejectInput,
+    cause: Option<&str>,
+) -> Result<Value> {
+    correction_commit(
+        t,
+        &input.suggestion_id,
+        &input.base_revision,
+        &input.final_text,
+        false,
+        cause,
+    )
 }
 
 pub(crate) fn reserve_identity(t: &Transaction<'_>, input: &IdentityReserveInput) -> Result<Value> {
@@ -871,6 +1700,110 @@ mod tests {
         })
     }
 
+    fn note_fixture(store: &Store, lesson_id: &str, text: &str) -> (String, String, String) {
+        let note_id = storage::id();
+        let object_id = storage::id();
+        let block_id = storage::id();
+        let run_id = storage::id();
+        store
+            .write(|t| {
+                let fact_set_revision = storage::id();
+                let body = json!({
+                    "note_id":note_id,
+                    "lesson_id":lesson_id,
+                    "fact_set_revision":fact_set_revision,
+                    "fact_ids":[],
+                    "objects":[{
+                        "object_id":object_id,
+                        "revision_id":storage::id(),
+                        "type":"text",
+                        "source_refs":[],
+                        "region_ids":[],
+                        "layout":{"bounds":[0,0,1,1],"z_order":0,"group_id":null,"constraints":[]},
+                        "extraction":"native",
+                        "editability":"native",
+                        "status":"complete",
+                        "children":[],
+                        "content":{"block_id":block_id,"runs":[{"element_id":run_id,"text":text}],"level":1}
+                    }],
+                    "revision_id":storage::id()
+                });
+                let committed = commit_entity(
+                    t,
+                    &note_id,
+                    "note",
+                    body,
+                    "content.committed",
+                    json!({"kind":"lesson","lesson_id":lesson_id}),
+                    None,
+                    None,
+                )?;
+                t.execute(
+                    "INSERT INTO notes VALUES(?1,?2,?3,?4)",
+                    params![
+                        note_id,
+                        lesson_id,
+                        fact_set_revision,
+                        encode(&committed["objects"])?
+                    ],
+                )
+                .map_err(sql_error)?;
+                Ok(())
+            })
+            .unwrap();
+        (note_id, object_id, block_id)
+    }
+
+    fn source_ref(store: &Store, entity_id: &str) -> SourceRef {
+        store
+            .read(|c| {
+                c.query_row(
+                    "SELECT e.revision_id,r.content_hash FROM entities e JOIN revisions r ON r.revision_id=e.revision_id WHERE e.entity_id=?1",
+                    [entity_id],
+                    |r| {
+                        Ok(SourceRef {
+                            entity_id: entity_id.into(),
+                            revision_id: r.get(0)?,
+                            content_hash: r.get(1)?,
+                            selector: Selector::V4(WholeSelector {
+                                kind: "whole".into(),
+                            }),
+                        })
+                    },
+                )
+                .map_err(sql_error)
+            })
+            .unwrap()
+    }
+
+    fn begin_note_text_lease(store: &Store, note_id: &str, block_id: &str, epoch: u64) {
+        store
+            .write(|t| {
+                begin_edit(
+                    t,
+                    &EditLease {
+                        view_id: storage::id(),
+                        target_id: note_id.into(),
+                        selectors: vec![Selector::V1(TextSelector {
+                            kind: "text".into(),
+                            block_id: block_id.into(),
+                            anchor: TextAnchor {
+                                left_element_id: None,
+                                right_element_id: None,
+                                element_ids: Vec::new(),
+                                scalar_range: ScalarRange { start: 0, end: 5 },
+                            },
+                        })],
+                        lease_epoch: epoch,
+                        composition_active: false,
+                        draft_revision: None,
+                    },
+                )?;
+                Ok(())
+            })
+            .unwrap();
+    }
+
     #[test]
     fn definition_resolve_checks_scope_and_source_revision() {
         let db = TestStore::new();
@@ -1107,5 +2040,261 @@ mod tests {
             })
             .unwrap();
         assert_eq!(projected["edge"]["freshness"], "update_available");
+    }
+
+    #[test]
+    fn content_patch_and_undo_commit_real_revisions_with_lease_and_cas() {
+        let db = TestStore::new();
+        let lesson_id = lesson(&db.store);
+        let (note_id, _object_id, block_id) = note_fixture(&db.store, &lesson_id, "hello");
+        let base_revision = db.store.head(&note_id).unwrap()["revision_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        begin_note_text_lease(&db.store, &note_id, &block_id, 1);
+        let patch = UserPatch {
+            patch_id: storage::id(),
+            target_id: note_id.clone(),
+            base_revision: base_revision.clone(),
+            operation: UserPatchOperation::TextReplace,
+            selector: Selector::V1(TextSelector {
+                kind: "text".into(),
+                block_id,
+                anchor: TextAnchor {
+                    left_element_id: None,
+                    right_element_id: None,
+                    element_ids: Vec::new(),
+                    scalar_range: ScalarRange { start: 0, end: 5 },
+                },
+            }),
+            before_hash: canonical_hash(&json!("hello")),
+            after_value: json!("world"),
+            author: "user".into(),
+            intent: "replace text".into(),
+            undo_group_id: storage::id(),
+            created_at: storage::now(),
+        };
+        let result = db
+            .store
+            .write(|t| {
+                content_patch(
+                    t,
+                    &ContentPatchInput {
+                        patch: patch.clone(),
+                        lease_epoch: 1,
+                    },
+                    None,
+                )
+            })
+            .unwrap();
+        let current = result["revision_id"].as_str().unwrap().to_owned();
+        assert_eq!(
+            db.store.head(&note_id).unwrap()["objects"][0]["content"]["runs"][0]["text"],
+            "world"
+        );
+        let stale = db
+            .store
+            .write(|t| {
+                content_patch(
+                    t,
+                    &ContentPatchInput {
+                        patch: UserPatch {
+                            base_revision: base_revision.clone(),
+                            before_hash: canonical_hash(&json!("wrong")),
+                            ..patch.clone()
+                        },
+                        lease_epoch: 1,
+                    },
+                    None,
+                )
+            })
+            .unwrap_err();
+        assert_eq!(stale.code, ErrorCode::Conflict);
+        let undone = db
+            .store
+            .write(|t| {
+                content_undo(
+                    t,
+                    &ContentUndoInput {
+                        undo_group_id: patch.undo_group_id.clone(),
+                        current_revision: current,
+                    },
+                    None,
+                )
+            })
+            .unwrap();
+        assert_ne!(undone["revision_id"], patch.base_revision);
+        assert_eq!(
+            db.store.head(&note_id).unwrap()["objects"][0]["content"]["runs"][0]["text"],
+            "hello"
+        );
+    }
+
+    #[test]
+    fn note_add_selection_requires_source_provenance_and_copies_object() {
+        let db = TestStore::new();
+        let lesson_id = lesson(&db.store);
+        let (source_note, source_object, _) = note_fixture(&db.store, &lesson_id, "source");
+        let (target_note, _, _) = note_fixture(&db.store, &lesson_id, "target");
+        let mut stale_source = source_ref(&db.store, &source_note);
+        stale_source.content_hash = "0".repeat(64);
+        let stale = db
+            .store
+            .write(|t| {
+                note_add_selection(
+                    t,
+                    &NoteAddSelectionInput {
+                        note_id: target_note.clone(),
+                        sources: vec![stale_source],
+                        object_ids: vec![source_object.clone()],
+                    },
+                    None,
+                )
+            })
+            .unwrap_err();
+        assert_eq!(stale.code, ErrorCode::StaleInput);
+
+        let source = source_ref(&db.store, &source_note);
+        db.store
+            .write(|t| {
+                note_add_selection(
+                    t,
+                    &NoteAddSelectionInput {
+                        note_id: target_note.clone(),
+                        sources: vec![source],
+                        object_ids: vec![source_object],
+                    },
+                    None,
+                )
+            })
+            .unwrap();
+        assert_eq!(
+            db.store.head(&target_note).unwrap()["objects"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn correction_accept_updates_secondary_revision_but_keeps_raw_source_immutable() {
+        let db = TestStore::new();
+        let lesson_id = lesson(&db.store);
+        let (source_note, _, _) = note_fixture(&db.store, &lesson_id, "raw source");
+        let source = source_ref(&db.store, &source_note);
+        let (secondary_id, suggestion_id, base_revision) = db
+            .store
+            .write(|t| {
+                let recording = crate::capture::RecordingCoordinator::reserve(
+                    t,
+                    &RecordingStartInput {
+                        lesson_id: Some(lesson_id.clone()),
+                        device_id: None,
+                    },
+                    None,
+                )?;
+                let recording_id = recording["recording_id"].as_str().unwrap().to_owned();
+                let secondary_id = storage::id();
+                let suggestion_id = storage::id();
+                let base_revision = storage::id();
+                let generation_revision = storage::id();
+                let suggestion = CorrectionSuggestion {
+                    suggestion_id: suggestion_id.clone(),
+                    secondary_id: secondary_id.clone(),
+                    source_revision: base_revision.clone(),
+                    anchor: TextAnchor {
+                        left_element_id: None,
+                        right_element_id: None,
+                        element_ids: Vec::new(),
+                        scalar_range: ScalarRange { start: 0, end: 5 },
+                    },
+                    original_text: "hello".into(),
+                    suggested_text: "hallo".into(),
+                    reason: "ordinary typo".into(),
+                    semantic_risk: CorrectionSuggestionSemanticRisk::Ordinary,
+                    state: CorrectionSuggestionState::Pending,
+                };
+                let body = json!({
+                    "secondary_id":secondary_id,
+                    "recording_id":recording_id,
+                    "raw_refs":[source],
+                    "ordered_spans":[],
+                    "text":"hello",
+                    "suggestions":[suggestion],
+                    "generation_revision":generation_revision,
+                    "revision_id":base_revision
+                });
+                commit_version(
+                    t,
+                    &secondary_id,
+                    "secondary_segment",
+                    &base_revision,
+                    body,
+                    "content.committed",
+                    json!({"kind":"lesson","lesson_id":lesson_id}),
+                    None,
+                    None,
+                )?;
+                let committed = head(t, &secondary_id)?;
+                t.execute(
+                    "INSERT INTO secondary_segments VALUES(?1,?2,?3,?4,?5,?6,?7)",
+                    params![
+                        secondary_id,
+                        recording_id,
+                        base_revision,
+                        encode(&committed["raw_refs"])?,
+                        encode(&committed["ordered_spans"])?,
+                        committed["text"].as_str(),
+                        committed["generation_revision"].as_str()
+                    ],
+                )
+                .map_err(sql_error)?;
+                t.execute(
+                    "INSERT INTO correction_suggestions VALUES(?1,?2,?3,?4,?5)",
+                    params![
+                        suggestion_id,
+                        secondary_id,
+                        base_revision,
+                        encode(&committed["suggestions"][0])?,
+                        "pending"
+                    ],
+                )
+                .map_err(sql_error)?;
+                Ok((secondary_id, suggestion_id, base_revision))
+            })
+            .unwrap();
+        let stale = db
+            .store
+            .write(|t| {
+                correction_accept(
+                    t,
+                    &CorrectionAcceptInput {
+                        suggestion_id: suggestion_id.clone(),
+                        base_revision: storage::id(),
+                        final_text: "hallo".into(),
+                    },
+                    None,
+                )
+            })
+            .unwrap_err();
+        assert_eq!(stale.code, ErrorCode::StaleInput);
+        let accepted = db
+            .store
+            .write(|t| {
+                correction_accept(
+                    t,
+                    &CorrectionAcceptInput {
+                        suggestion_id,
+                        base_revision,
+                        final_text: "hallo".into(),
+                    },
+                    None,
+                )
+            })
+            .unwrap();
+        assert_eq!(db.store.head(&secondary_id).unwrap()["text"], "hallo");
+        assert_ne!(accepted["revision_id"], Value::Null);
+        assert!(db.store.head(&source_note).unwrap()["objects"].is_array());
     }
 }
