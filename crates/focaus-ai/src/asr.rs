@@ -237,6 +237,7 @@ impl StreamingSession {
         if provider_task_id.is_empty() {
             return Err(invalid_argument("provider_task_id_required"));
         }
+        crate::transport::validate_remote_task_id(&provider_task_id)?;
         Ok(Self {
             task_id: open.task_id.clone(),
             attempt,
@@ -417,9 +418,7 @@ pub fn filetrans_cancel_allowed(status: &FileTransStatus) -> bool {
 
 pub fn build_stream_run_task(open: &AsrStreamOpen, provider_task_id: &str) -> Result<Value, SafeError> {
     validate_stream_open(open)?;
-    if provider_task_id.is_empty() {
-        return Err(invalid_argument("provider_task_id_required"));
-    }
+    crate::transport::validate_remote_task_id(provider_task_id)?;
     let context = open.context.iter().map(|text| json!({
         "role": "user",
         "content": [{ "type": "input_text", "text": text }]
@@ -450,9 +449,7 @@ pub fn build_stream_run_task(open: &AsrStreamOpen, provider_task_id: &str) -> Re
 }
 
 pub fn build_stream_finish_task(provider_task_id: &str) -> Result<Value, SafeError> {
-    if provider_task_id.is_empty() {
-        return Err(invalid_argument("provider_task_id_required"));
-    }
+    crate::transport::validate_remote_task_id(provider_task_id)?;
     Ok(json!({
         "header": { "action": "finish-task", "task_id": provider_task_id, "streaming": "duplex" },
         "payload": { "input": {} }
@@ -611,6 +608,7 @@ impl RemoteTaskMap {
         if local.is_empty() || remote.is_empty() {
             return Err(invalid_argument("task_ids_required"));
         }
+        crate::transport::validate_remote_task_id(remote)?;
         if self.local_to_remote.get(local).is_some_and(|current| current != remote)
             || self.remote_to_local.get(remote).is_some_and(|current| current != local)
         {
@@ -781,8 +779,8 @@ mod tests {
 
     #[test]
     fn streaming_final_replaces_provisional_but_never_final() {
-        let mut session = StreamingSession::open(&open(), "remote", 2, 1).unwrap();
-        let provisional = RemoteSentence { provider_task_id: "remote".into(), connection_epoch: 2, sentence_id: "s1".into(), finality: AsrRawCandidateState::Provisional, text: "hello".into(), begin_time_ms: 0, end_time_ms: 100, speaker_ref: None };
+        let mut session = StreamingSession::open(&open(), "remote-123", 2, 1).unwrap();
+        let provisional = RemoteSentence { provider_task_id: "remote-123".into(), connection_epoch: 2, sentence_id: "s1".into(), finality: AsrRawCandidateState::Provisional, text: "hello".into(), begin_time_ms: 0, end_time_ms: 100, speaker_ref: None };
         assert!(matches!(session.accept_sentence(provisional.clone()).unwrap(), SentenceDisposition::New(_)));
         let mut final_sentence = provisional;
         final_sentence.finality = AsrRawCandidateState::Final;
@@ -842,11 +840,11 @@ mod tests {
         let scaled = TimeMapping { mapping_revision_id: "scaled".into(), derived_asset_id: "a".into(), segments: vec![focaus_contracts::MappingSegment { derived_frames: FrameRange { start_frame: 0, end_frame: 100 }, original_asset_id: "a".into(), original_track_id: "t".into(), original_frames: FrameRange { start_frame: 0, end_frame: 200 }, timeline: TimelineRange { start_ms: 0, end_ms: 1000 }, scale_num: 2, scale_den: 1, delay_frames: 0, max_error_ms: 0.0 }] };
         assert!(map_relative_interval(&scaled, 0, 1000).is_err());
         assert_eq!(map_relative_interval_with_sample_rate(&scaled, 0, 1000, 100).unwrap(), TimelineRange { start_ms: 0, end_ms: 1000 });
-        let body = build_stream_run_task(&open(), "remote").unwrap();
+        let body = build_stream_run_task(&open(), "remote-123").unwrap();
         assert_eq!(body["payload"]["model"], STREAMING_MODEL_ID);
         assert_eq!(body["payload"]["parameters"]["sample_rate"], 16_000);
         assert!(body["payload"]["parameters"].get("channels").is_none());
-        assert_eq!(build_stream_finish_task("remote").unwrap()["payload"]["input"], serde_json::json!({}));
+        assert_eq!(build_stream_finish_task("remote-123").unwrap()["payload"]["input"], serde_json::json!({}));
         assert_eq!(filetrans_required_headers()["X-DashScope-Async"], "enable");
         assert!(body.to_string().find("credential").is_none());
         assert!(validate_audio_chunk(&AudioChunk { chunk_seq: 0, audio_span: AudioSpan { audio_span_id: "span".into(), recording_id: "rec".into(), asset_id: Some("asset".into()), track_id: Some("track".into()), frame_range: Some(FrameRange { start_frame: 0, end_frame: 10 }), timeline_range: TimelineRange { start_ms: 10_000, end_ms: 10_100 }, mapping_revision_id: Some("map-1".into()), coverage_status: AudioSpanCoverageStatus::Captured, asr_coverage: AudioSpanAsrCoverage::Pending }, encoded_bytes: vec![1], mapping: mapping() }).is_ok());

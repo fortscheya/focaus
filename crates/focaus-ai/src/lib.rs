@@ -11,6 +11,7 @@ pub mod asr;
 pub mod catchup;
 pub mod fixtures;
 pub mod progress;
+pub mod runtime;
 pub mod secondary;
 pub mod transport;
 pub mod visualization;

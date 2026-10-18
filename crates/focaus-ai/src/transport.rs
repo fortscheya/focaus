@@ -142,6 +142,7 @@ where
     ) -> Result<JsonResponse, SafeError> {
         validate_http_endpoint(endpoint, binding, &self.policy)?;
         let token = self.credentials.bearer_token(binding)?;
+        validate_extra_headers(headers)?;
         let mut request = self.client.post(endpoint).bearer_auth(token).json(&body);
         if let Some(workspace_id) = &self.policy.workspace_id {
             request = request.header("X-DashScope-WorkSpace", workspace_id);
@@ -374,9 +375,10 @@ pub enum AsyncTaskAction {
 }
 
 pub fn build_async_task_endpoint(policy: &EndpointPolicy, provider_task_id: &str, action: AsyncTaskAction) -> Result<String, SafeError> {
-    if policy.binding.model_id != ModelId::QwenAudio31AsrFlashFiletrans || provider_task_id.is_empty() || provider_task_id.contains('/') || provider_task_id.contains('?') || provider_task_id.contains('#') {
-        return Err(invalid_argument("filetrans_task_endpoint_invalid"));
+    if policy.binding.model_id != ModelId::QwenAudio31AsrFlashFiletrans {
+        return Err(invalid_argument("filetrans_task_endpoint_model_mismatch"));
     }
+    validate_remote_task_id(provider_task_id)?;
     let base = policy.http_origin.trim_end_matches('/');
     let prefix = policy.http_path_prefix.trim_end_matches('/');
     let suffix = match action {
@@ -384,6 +386,26 @@ pub fn build_async_task_endpoint(policy: &EndpointPolicy, provider_task_id: &str
         AsyncTaskAction::Cancel => "/cancel",
     };
     Ok(format!("{base}{prefix}/tasks/{provider_task_id}{suffix}"))
+}
+
+pub fn validate_remote_task_id(task_id: &str) -> Result<(), SafeError> {
+    if task_id.len() < 8 || task_id.len() > 128 || task_id == "." || task_id == ".." || task_id.chars().any(|ch| !(ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')) {
+        return Err(invalid_argument("provider_task_id_path_invalid"));
+    }
+    Ok(())
+}
+
+fn validate_extra_headers(headers: &[(&str, &str)]) -> Result<(), SafeError> {
+    for (name, value) in headers {
+        let lower = name.to_ascii_lowercase();
+        if matches!(lower.as_str(), "authorization" | "proxy-authorization" | "host" | "content-length" | "transfer-encoding" | "connection" | "upgrade" | "x-dashscope-workspace") || lower.starts_with("sec-websocket-") {
+            return Err(invalid_argument("reserved_provider_header_override"));
+        }
+        if lower == "x-dashscope-async" && *value != "enable" {
+            return Err(invalid_argument("async_header_must_be_enable"));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -432,6 +454,8 @@ mod tests {
         let policy = EndpointPolicy::for_beijing(binding_for_model(ModelId::QwenAudio31AsrFlashFiletrans), "workspace123").unwrap();
         assert_eq!(build_async_task_endpoint(&policy, "provider-123", AsyncTaskAction::Fetch).unwrap(), "https://workspace123.cn-beijing.maas.aliyuncs.com/api/v1/tasks/provider-123");
         assert_eq!(build_async_task_endpoint(&policy, "provider-123", AsyncTaskAction::Cancel).unwrap(), "https://workspace123.cn-beijing.maas.aliyuncs.com/api/v1/tasks/provider-123/cancel");
+        assert!(validate_remote_task_id("../escape").is_err());
+        assert!(validate_remote_task_id("provider-123").is_ok());
     }
 
     #[test]
@@ -443,5 +467,14 @@ mod tests {
         let parsed = parse_chat_completion_json(&crate::fixtures::qwen38_chat_completion()).unwrap();
         assert_eq!(parsed["ok"], true);
         assert!(parse_chat_completion_json(&serde_json::json!({"choices":[{"finish_reason":"length","message":{"content":"{}"}}]})).is_err());
+    }
+
+    #[test]
+    fn host_owned_headers_cannot_be_overridden_by_extra_provider_headers() {
+        assert!(validate_extra_headers(&[("Authorization", "Bearer other")]).is_err());
+        assert!(validate_extra_headers(&[("Host", "other.example")]).is_err());
+        assert!(validate_extra_headers(&[("X-DashScope-WorkSpace", "other")]).is_err());
+        assert!(validate_extra_headers(&[("X-DashScope-Async", "enable")]).is_ok());
+        assert!(validate_extra_headers(&[("X-DashScope-Async", "disable")]).is_err());
     }
 }
