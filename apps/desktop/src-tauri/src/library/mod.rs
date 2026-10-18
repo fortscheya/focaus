@@ -1,5 +1,6 @@
 //! Library transactions, immutable revisions and evidence publication gates.
 pub mod catchup;
+pub mod resources;
 pub mod snapshots;
 use crate::storage::{
     self, commit_entity, decode, emit, encode, head, lifecycle, sql_error, Result,
@@ -193,6 +194,71 @@ pub(crate) fn create_lesson(
     Ok(body)
 }
 pub(crate) fn get_content(c: &Connection, input: &ContentGetInput) -> Result<Value> {
+    // Host projections are not content revisions and have dedicated stores.
+    let view: bool = c
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM views WHERE view_id=?1)",
+            [&input.entity_id],
+            |r| r.get(0),
+        )
+        .map_err(sql_error)?;
+    if view {
+        let view = crate::windows::get(c, &input.entity_id)?;
+        if input
+            .revision_id
+            .as_ref()
+            .is_some_and(|r| r != &view.view_revision)
+        {
+            return Err(error(ErrorCode::Conflict, "View state revision changed"));
+        }
+        return storage::value(&view);
+    }
+    let task: bool = c
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM tasks WHERE task_id=?1)",
+            [&input.entity_id],
+            |r| r.get(0),
+        )
+        .map_err(sql_error)?;
+    if task {
+        let task = crate::tasks::task(c, &input.entity_id)?;
+        if input
+            .revision_id
+            .as_ref()
+            .is_some_and(|r| r != &task.snapshot_id)
+        {
+            return Err(error(ErrorCode::Conflict, "Task input revision changed"));
+        }
+        return storage::value(&task);
+    }
+    let search: Option<String> = c
+        .query_row(
+            "SELECT state_json FROM search_sessions WHERE search_id=?1",
+            [&input.entity_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(sql_error)?;
+    if let Some(search) = search {
+        let stored: Value = decode(&search)?;
+        if input
+            .revision_id
+            .as_ref()
+            .is_some_and(|r| stored["session"]["scope_snapshot_id"].as_str() != Some(r))
+        {
+            return Err(error(
+                ErrorCode::SearchInvalidated,
+                "Search snapshot changed",
+            ));
+        }
+        return Ok(stored["session"].clone());
+    }
+    if let Some(revision) = &input.revision_id {
+        let progress:Option<String>=c.query_row("SELECT body_json FROM progress_states WHERE lesson_id=?1 AND json_extract(body_json,'$.snapshot_id')=?2",params![input.entity_id,revision],|r|r.get(0)).optional().map_err(sql_error)?;
+        if let Some(progress) = progress {
+            return decode(&progress);
+        }
+    }
     if lifecycle(c, &input.entity_id)? == "deleted" {
         return Err(error(
             ErrorCode::SourceDeleted,

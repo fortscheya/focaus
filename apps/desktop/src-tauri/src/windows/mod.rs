@@ -285,8 +285,11 @@ pub(crate) fn ready(
             "Only the target WebView can acknowledge handoff",
         ));
     }
+    if base != input.view_revision {
+        return Err(error(ErrorCode::Conflict, "View handoff base changed"));
+    }
     if state == "committed" {
-        return storage::value(&get(t, &view_id)?);
+        return storage::value(&get_transfer(t, &input.transfer_id)?);
     }
     if state != "preparing"
         || base != input.view_revision
@@ -331,7 +334,20 @@ pub(crate) fn ready(
         cause,
         None,
     )?;
-    storage::value(&get(t, &view_id)?)
+    storage::value(&get_transfer(t, &input.transfer_id)?)
+}
+pub(crate) fn get_transfer(c: &Connection, id: &str) -> Result<ViewTransfer> {
+    let (view_id,source_window_id,target_window_id,base_view_revision,lease_epoch,state):(String,String,String,String,u64,String)=c.query_row("SELECT view_id,source_window_id,target_window_id,base_view_revision,lease_epoch,state FROM view_transfers WHERE transfer_id=?1",[id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?))).map_err(sql_error)?;
+    Ok(ViewTransfer {
+        transfer_id: id.into(),
+        view_id,
+        source_window_id,
+        target_window_id,
+        base_view_revision,
+        lease_epoch,
+        state: decode(&encode(&state)?)?,
+        draft_revision: None,
+    })
 }
 pub(crate) fn rollback(t: &Transaction<'_>, transfer: &str) -> Result<()> {
     let view: Option<String> = t

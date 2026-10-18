@@ -144,14 +144,21 @@ pub(crate) fn task(c: &Connection, id: &str) -> Result<Task> {
     })
 }
 pub(crate) fn task_event(t: &rusqlite::Transaction<'_>, task: &Task) -> Result<()> {
+    let entity_seq: u64 = t
+        .query_row(
+            "SELECT COALESCE(MAX(entity_seq),0)+1 FROM outbox WHERE entity_id=?1",
+            [&task.task_id],
+            |r| r.get(0),
+        )
+        .map_err(sql_error)?;
     emit(
         t,
         "task.changed",
-        &task.target_id,
-        task.attempt,
+        &task.task_id,
+        entity_seq,
         &task.snapshot_id,
         json!({"kind":"entity","entity_id":task.target_id}),
-        json!({"task_id":task.task_id,"state":task.state,"attempt":task.attempt}),
+        json!({"task_id":task.task_id,"target_id":task.target_id,"state":task.state,"attempt":task.attempt}),
         None,
         Some(&task.task_id),
     )?;

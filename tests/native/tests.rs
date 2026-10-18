@@ -486,6 +486,22 @@ fn task_resource_reservation_cancellation_and_restart_keep_checkpoint() {
         .is_err());
     manager.transition(&tid, 1, TaskState::Cancelled).unwrap();
     assert!(manager.transition(&tid, 1, TaskState::Queued).is_err());
+    let watermark = manager.get(&tid).unwrap().snapshot_id;
+    let projected = db
+        .store
+        .read(|c| {
+            library::get_content(
+                c,
+                &ContentGetInput {
+                    entity_id: tid.clone(),
+                    revision_id: Some(watermark),
+                    selector: None,
+                },
+            )
+        })
+        .unwrap();
+    validate("Task", &projected).unwrap();
+    assert_eq!(projected["state"], "cancelled");
 }
 
 #[test]
@@ -684,11 +700,38 @@ fn view_handoff_rolls_back_or_atomically_changes_single_owner() {
             )
         })
         .unwrap();
-    assert_eq!(moved["host_window_id"], target);
+    validate("ViewTransfer", &moved).unwrap();
+    assert_eq!(moved["target_window_id"], target);
+    assert_eq!(moved["state"], "committed");
     assert!(db
         .store
         .read(|c| windows::authorize(c, &view.view_id, &source))
         .is_err());
+    let current = db.store.read(|c| windows::get(c, &view.view_id)).unwrap();
+    let host = ipc::NativeHost::open(&db.path, INITIAL_MIGRATION).unwrap();
+    host.bind_window(
+        "target",
+        &target,
+        vec![serde_json::from_value(json!({"kind":"global"})).unwrap()],
+    )
+    .unwrap();
+    let snapshot = host
+        .dispatch_webview(
+            "target",
+            command(
+                "state.open",
+                &target,
+                json!({"scopes":[{"kind":"global"}],"last_seq":null,"capabilities":capabilities()}),
+            ),
+        )
+        .unwrap();
+    assert_eq!(
+        snapshot.result.unwrap()["snapshot"]["records"]["view_states"][&view.view_id]
+            ["host_window_id"],
+        target
+    );
+    let content=host.dispatch_webview("target",command("content.get",&target,json!({"entity_id":view.view_id,"revision_id":current.view_revision,"selector":null}))).unwrap();
+    validate("ContentView", &content.result.unwrap()).unwrap();
 }
 
 #[test]
@@ -836,4 +879,35 @@ fn focaus_generations_body_revision_and_ui_deadline_are_independent() {
         focaus.submit(&submit, result).unwrap_err().code,
         ErrorCode::StaleInput
     );
+}
+
+#[test]
+fn managed_resource_capability_rejects_links_escape_and_overwrite() {
+    use std::io::Read;
+    let db = TestLibrary::new();
+    let stage = db.path.join("stage");
+    std::fs::create_dir(&stage).unwrap();
+    std::fs::write(stage.join("a.txt"), "学习").unwrap();
+    std::fs::write(db.path.join("private.txt"), "private fixture").unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(db.path.join("private.txt"), stage.join("escape.txt")).unwrap();
+    assert!(
+        library::resources::open_relative(&stage, std::path::Path::new("../private.txt")).is_err()
+    );
+    assert!(library::resources::open_relative(&stage, std::path::Path::new("escape.txt")).is_err());
+    let source = library::resources::open_relative(&stage, std::path::Path::new("a.txt")).unwrap();
+    let (hash, length) =
+        library::resources::persist_bytes(source, &db.path, "resources/fixture.txt", 100).unwrap();
+    assert_eq!(hash, search_text_hash("学习"));
+    assert_eq!(length, 6);
+    let source = library::resources::open_relative(&stage, std::path::Path::new("a.txt")).unwrap();
+    assert!(
+        library::resources::persist_bytes(source, &db.path, "resources/fixture.txt", 100).is_err()
+    );
+    let mut content = String::new();
+    std::fs::File::open(db.path.join("resources/fixture.txt"))
+        .unwrap()
+        .read_to_string(&mut content)
+        .unwrap();
+    assert_eq!(content, "学习");
 }

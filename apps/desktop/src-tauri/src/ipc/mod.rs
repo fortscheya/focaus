@@ -480,6 +480,17 @@ impl NativeHost {
                 records.entry(collection.into()).or_default().insert(entity,body);
             }
             for collection in ["courses","lessons","content_heads","task_summaries","progress","view_states","visualizations","search_indexes","catchup_heads"]{records.entry(collection.into()).or_default();}
+            let has_global=input.scopes.iter().any(|s|matches!(s,Scope::V0(_)));
+            let mut views=c.prepare("SELECT view_id FROM views ORDER BY rowid").map_err(sql_error)?;
+            for id in views.query_map([],|r|r.get::<_,String>(0)).map_err(sql_error)? {let id=id.map_err(sql_error)?;let view=crate::windows::get(c,&id)?;if has_global||input.scopes.iter().any(|scope|storage::value(scope).ok().is_some_and(|scope|scope["view_id"]==id||scope["lesson_id"]==view.lesson_id)){records.get_mut("view_states").unwrap().insert(id,storage::value(&view)?);}}
+            if has_global {
+                let mut tasks=c.prepare("SELECT task_id FROM tasks ORDER BY rowid").map_err(sql_error)?;
+                for id in tasks.query_map([],|r|r.get::<_,String>(0)).map_err(sql_error)? {let id=id.map_err(sql_error)?;records.get_mut("task_summaries").unwrap().insert(id.clone(),storage::value(&crate::tasks::task(c,&id)?)?);}
+                let mut progress=c.prepare("SELECT lesson_id,body_json FROM progress_states").map_err(sql_error)?;
+                for row in progress.query_map([],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?))).map_err(sql_error)?{let(id,body)=row.map_err(sql_error)?;records.get_mut("progress").unwrap().insert(id,storage::decode(&body)?);}
+                let mut indexes=c.prepare("SELECT scope_id,projection_version,index_generation,head_manifest_hash,dirty_ranges_json,coverage_json,visibility_epoch,last_committed_seq FROM search_index_state").map_err(sql_error)?;
+                for row in indexes.query_map([],|r|Ok((r.get::<_,String>(0)?,r.get::<_,u64>(1)?,r.get::<_,u64>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,String>(5)?,r.get::<_,u64>(6)?,r.get::<_,u64>(7)?))).map_err(sql_error)? {let(id,projection,generation,manifest,dirty,coverage,visibility,last)=row.map_err(sql_error)?;records.get_mut("search_indexes").unwrap().insert(id,json!({"projection_version":projection,"index_generation":generation,"head_manifest_hash":manifest,"dirty_ranges":storage::decode::<Value>(&dirty)?,"coverage":storage::decode::<Value>(&coverage)?,"visibility_epoch":visibility,"last_committed_seq":last}));}
+            }
             let recording:Option<String>=c.query_row("SELECT recording_id FROM recording_sessions ORDER BY state IN ('starting','recording','paused','stopping') DESC,rowid DESC LIMIT 1",[],|r|r.get(0)).optional().map_err(sql_error)?;
             let mut global=BTreeMap::new();global.insert("recording".into(),recording.map(|id|crate::storage::head(c,&id)).transpose()?.unwrap_or(Value::Null));global.insert("visibility_epoch".into(),json!(crate::storage::epoch(c)?));global.insert("windows".into(),json!([]));
             Ok(AppSnapshot {contract_version:CONTRACT_VERSION.into(),host_run_id:self.run_id.clone(),snapshot_seq:seq,scopes:input.scopes.clone(),global,records,continuations:Vec::new()})

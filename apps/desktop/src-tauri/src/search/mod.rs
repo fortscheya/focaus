@@ -8,7 +8,6 @@ use focaus_contracts::*;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeSet,
     time::{Duration, Instant},
@@ -328,7 +327,7 @@ pub fn extract(
             audio_spans: Vec::new(),
             fallback: None,
         };
-        let field_hash = format!("{:x}", Sha256::digest(display_text.as_bytes()));
+        let field_hash = search_text_hash(&display_text);
         units.push(SearchUnit {
             search_unit_id: storage::id(),
             owner_entity_id: owner.into(),
@@ -391,7 +390,7 @@ impl SearchCoordinator {
             {
                 return Err(error(ErrorCode::StaleInput, "Projection owner mismatch"));
             }
-            if unit.content_hash != format!("{:x}", Sha256::digest(unit.display_text.as_bytes())) {
+            if unit.content_hash != search_text_hash(&unit.display_text) {
                 return Err(error(
                     ErrorCode::InvalidResult,
                     "Search field byte hash mismatch",
