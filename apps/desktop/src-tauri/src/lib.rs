@@ -20,3 +20,4 @@ pub mod search;
 pub mod storage;
 pub mod tasks;
 pub mod visualizations;
+pub mod windows;
