@@ -19,3 +19,21 @@ rusqlite = { version = "=0.32.1", features = ["bundled"] }
 cpal = "=0.16.0"
 sha2.workspace = true
 unicode-normalization = "=0.1.22"
+tauri = { version = "2", optional = true, features = ["tray-icon"] }
+uuid = { version = "1", features = ["v4"], optional = true }
+
+[build-dependencies]
+tauri-build = { version = "2", optional = true }
+
+[features]
+default = []
+native-shell = ["dep:tauri", "dep:tauri-build", "dep:uuid"]
+
+[[bin]]
+name = "focaus"
+path = "src/main.rs"
+required-features = ["native-shell"]
+
+[[test]]
+name = "wire_contracts"
+path = "../../../tests/integration/wire_contracts.rs"

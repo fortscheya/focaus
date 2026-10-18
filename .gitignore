@@ -50,3 +50,5 @@ playwright-report/
 *.db
 *.db-wal
 *.db-shm
+# Tauri-generated schemas are reproducible from tauri.conf.json/capabilities.
+apps/desktop/src-tauri/gen/

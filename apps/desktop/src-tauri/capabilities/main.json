@@ -1,0 +1,13 @@
+{
+  "identifier": "main",
+  "description": "Local Focaus workbench event subscription. Business actions use host-validated commands.",
+  "windows": [
+    "main",
+    "course-*",
+    "view-*"
+  ],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten"
+  ]
+}
