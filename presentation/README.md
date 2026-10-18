@@ -12,12 +12,15 @@
 pnpm install
 pnpm dev
 pnpm build
+pnpm serve
 pnpm test
 pnpm export:pdf
 pnpm export:pptx
 ```
 
-正式演示使用浏览器打开构建后的 HTML，并通过本地 HTTP 服务提供资源；不要依赖 `file://` 或临场外网字体、图片和数据。静态服务需要把未知路径回退到 `index.html`，这样直接打开某一页的深链接也能正常工作。
+正式演示使用浏览器打开构建后的 HTML，并通过本地 HTTP 服务提供资源；不要依赖 `file://` 或临场外网字体、图片和数据。使用 `pnpm serve` 或双击 `open-demo.command` 启动本地服务；它会把 Slidev 的 `/1` 到 `/6` 页面地址回退到 `index.html`，因此直接打开某一页或刷新深链接都能正常工作。
+
+浏览器地址使用 `http://127.0.0.1:3032/`，也可以使用 `http://127.0.0.1:3032/1` 直接打开第 1 页。不要用 `python3 -m http.server` 代替 `serve-demo.py`，因为标准静态服务器会把 `/1` 当成文件并返回 404。
 
 当前实时流是本地彩排实现：点击 Focaus 后尝试打开浏览器麦克风，文字、二次转写和笔记使用预置路演流逐段累积，不上传音频，也不调用云模型。接入真实 ASR 时只替换 `composables/useLivePitchStream.ts` 的 adapter。
 

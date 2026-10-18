@@ -25,9 +25,10 @@ test('Focaus roadshow follows the six-slide interaction path', async ({ page }) 
 
   await nextSlide(page)
   await expect(page.getByRole('heading', { name: /笔记可以以不同的 level mix/ })).toBeVisible()
-  await page.locator('input[aria-label="中英混合等级"]').fill('4')
+  await page.locator('input[aria-label="中英混合等级"]:visible').fill('4')
   await expect(page.getByText('Level 4')).toBeVisible()
-  await page.getByRole('button', { name: /一键添加至笔记/ }).click()
+  // Slidev's transparent bottom toolbar can cover this low-positioned button at 720px height.
+  await page.getByRole('button', { name: /一键添加至笔记/ }).filter({ visible: true }).press('Enter')
   await expect(page.getByText('自动生成：训练过程可视化')).toBeVisible()
   await expect(page.locator('canvas')).toBeVisible()
 

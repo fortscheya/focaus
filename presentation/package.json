@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "slidev --port 3030",
     "build": "slidev build --base ./",
+    "serve": "python3 serve-demo.py",
     "export:pdf": "slidev export --format pdf",
     "export:pptx": "slidev export --format pptx",
     "test": "node node_modules/@playwright/test/cli.js test"
