@@ -20,7 +20,7 @@
 ## Active: One-hour Local Demo (D174)
 - Demo route `?demo=1` is implemented in the desktop app for the user's immediate walkthrough: local microphone capture with local sentence replay, source selection and courseware insertion, transcript/courseware navigation, L08 convolution reconstruction, 2D object interaction, and secondary transcript correction.
 - The route uses only local curated DeepLearning-derived sample text. It visibly states local Demo data, does not upload audio, and does not invoke the four cloud models. This is a reviewable UI/demo path, not real ASR or full product acceptance.
-- Next: commit the demo after diff/build checks, then run a visible route check if the existing Vite server is available. Keep real streaming ASR behind the previously stated cloud/data/cost authorization boundary.
+- Demo 已在 `18251de` 提交；typecheck、12项桌面测试、build 和独立端口 `?demo=1` 可见路由检查均通过。真实 streaming ASR 继续受此前云/数据/费用授权边界约束。
 
 ## Later / Explicitly Deferred
 - 系统声音在麦克风/已有录音闭环后；Web/iOS联动、按实际课次自动组织、终端用户服务配置、长期隐私留存策略后续。

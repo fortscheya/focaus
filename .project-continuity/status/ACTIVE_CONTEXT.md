@@ -19,4 +19,5 @@
 - 真实窗口已完成稳定身份/恢复/standalone bootstrap和六格注册观察；Command+F在空索引显示真实0态，真实命中待有内容投影后复验。
 - 真实云/上传/费用仍待具体授权；四专用凭据槽位不读取、不输出、不串用。
 - Demo 已明确显示“本地 Demo 数据 / 不调用云模型 / 不上传音频”；麦克风可实际采集，但当前文字来自本地 Demo stream adapter，不能称为真实 ASR。真实 qwen-audio streaming 仍待单独云调用/数据/费用授权。
+- Demo 阶段已提交 `18251de`（`feat: add local streaming classroom demo`）；提交后工作树仅有外部未跟踪 `presentation/`，未纳入本次提交。
 - 契约2.0.0/material2.0.0/visualization1.0.0；四专用槽位，不读/输出密钥，指定模型不换，grilling不重开。
