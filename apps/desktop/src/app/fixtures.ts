@@ -12,6 +12,18 @@ export const ids = {
   sourceRevision: '4c11a85f-f3da-4f4f-9701-000000000009',
   searchUnit: '4c11a85f-f3da-4f4f-9701-000000000010',
   visualization: '4c11a85f-f3da-4f4f-9701-000000000011',
+  factOne: '4c11a85f-f3da-4f4f-9701-000000000023',
+  factTwo: '4c11a85f-f3da-4f4f-9701-000000000024',
+  factThree: '4c11a85f-f3da-4f4f-9701-000000000025',
+  definitionConv: '4c11a85f-f3da-4f4f-9701-000000000026',
+  definitionDot: '4c11a85f-f3da-4f4f-9701-000000000027',
+  bindingStride: '4c11a85f-f3da-4f4f-9701-000000000028',
+  bodyOne: '4c11a85f-f3da-4f4f-9701-000000000029',
+  bodyTwo: '4c11a85f-f3da-4f4f-9701-000000000030',
+  bodyThree: '4c11a85f-f3da-4f4f-9701-000000000031',
+  viewRevision: '4c11a85f-f3da-4f4f-9701-000000000034',
+  detachedWindow: '4c11a85f-f3da-4f4f-9701-000000000035',
+  transfer: '4c11a85f-f3da-4f4f-9701-000000000036',
 } as const;
 
 export type WorkspaceViewKind = 'note' | 'raw' | 'secondary' | 'material' | 'focaus' | 'visualization';
@@ -161,7 +173,7 @@ export const initialLanguageVariant: LanguageVariant = {
   note_id: ids.note,
   tier: 3,
   fact_set_revision: ids.revision,
-  fact_ids: ['fact-conv-1', 'fact-conv-2'],
+  fact_ids: [ids.factOne, ids.factTwo],
   presentation_revision: ids.revision,
   sync_status: 'stale',
 };
@@ -184,22 +196,22 @@ export const fixtureFocausResult: CatchupResult = {
     status: 'supported',
   },
   path_nodes: [
-    {node_id: 'path-missed', role: 'missed_key', fact_ids: ['fact-conv-1'], definition_ids: ['definition-conv'], binding_ids: [], body_block_ids: ['body-1'], evidence_role: 'teacher_path', source_refs: []},
-    {node_id: 'path-bridge', role: 'bridge', fact_ids: ['fact-conv-2'], definition_ids: [], binding_ids: [], body_block_ids: ['body-2'], evidence_role: 'teacher_path', source_refs: []},
-    {node_id: 'path-current', role: 'current', fact_ids: ['fact-conv-3'], definition_ids: [], binding_ids: ['binding-stride'], body_block_ids: ['body-3'], evidence_role: 'system_explanation', source_refs: []},
+    {node_id: 'path-missed', role: 'missed_key', fact_ids: [ids.factOne], definition_ids: [ids.definitionConv], binding_ids: [], body_block_ids: [ids.bodyOne], evidence_role: 'teacher_path', source_refs: []},
+    {node_id: 'path-bridge', role: 'bridge', fact_ids: [ids.factTwo], definition_ids: [], binding_ids: [], body_block_ids: [ids.bodyTwo], evidence_role: 'teacher_path', source_refs: []},
+    {node_id: 'path-current', role: 'current', fact_ids: [ids.factThree], definition_ids: [], binding_ids: [ids.bindingStride], body_block_ids: [ids.bodyThree], evidence_role: 'system_explanation', source_refs: []},
   ],
   path_edges: [
     {from_node_id: 'path-missed', to_node_id: 'path-bridge', relation: 'dependency', source_refs: [], certainty: 'supported'},
     {from_node_id: 'path-bridge', to_node_id: 'path-current', relation: 'temporal', source_refs: [], certainty: 'supported'},
   ],
   prerequisites: [
-    {definition_id: 'definition-dot-product', binding_id: null, fact_id: null, reason: '需要知道局部窗口与核的对应位置', source_refs: [], scope_id: ids.lesson, outside_window: true},
+    {definition_id: ids.definitionDot, binding_id: null, fact_id: null, reason: '需要知道局部窗口与核的对应位置', source_refs: [], scope_id: ids.lesson, outside_window: true},
   ],
   prerequisites_reason: null,
   body: [
-    {block_id: 'body-1', text: '老师先把输入看成由局部窗口组成；每个窗口与卷积核对齐后，输出格只依赖这块区域。'},
-    {block_id: 'body-2', text: '因此，滑动一步会得到下一个局部计算，而不是重新读取整张输入。'},
-    {block_id: 'body-3', text: '当前正在把这个过程写成逐项相乘再求和，步幅决定下一个窗口从哪里开始。'},
+    {block_id: ids.bodyOne, text: '老师先把输入看成由局部窗口组成；每个窗口与卷积核对齐后，输出格只依赖这块区域。'},
+    {block_id: ids.bodyTwo, text: '因此，滑动一步会得到下一个局部计算，而不是重新读取整张输入。'},
+    {block_id: ids.bodyThree, text: '当前正在把这个过程写成逐项相乘再求和，步幅决定下一个窗口从哪里开始。'},
   ],
   presentation_tier: 3,
   body_evidence_cutoff: [{recording_id: ids.recording, end_ms: 300000, status: 'known'}],

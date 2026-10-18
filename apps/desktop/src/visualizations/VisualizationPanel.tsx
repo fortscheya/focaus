@@ -158,7 +158,7 @@ export function VisualizationPanel({adapter}: {adapter: HostAdapter}) {
       revision_id: ids.revision,
       parameters: nextParameters,
       interaction_seq: nextSeq,
-      algorithm_version: 'conv2d_spatial-1.0.0',
+      algorithm_version: '1.0.0',
     };
     try {
       const response = await adapter.invoke('visualization.evaluate', payload, makeEnvelope('visualization.evaluate'));
@@ -239,7 +239,7 @@ export function VisualizationPanel({adapter}: {adapter: HostAdapter}) {
             <div className="parameter-summary">
               <span>输入 shape</span><strong>1 × 3 × 3</strong>
               <span>kernel shape</span><strong>1 × 2 × 2</strong>
-              <span>padding</span><strong>0 / 0 / 0 / 0</strong>
+              <span>padding (T/B/L/R)</span><strong>0 / 0 / 0 / 0</strong>
               <span>axis order</span><strong>CHW</strong>
             </div>
             <div className="runtime-controls">

@@ -17,6 +17,7 @@ export function RecordingBar({
   assignmentEpoch,
   onToggle,
   onStop,
+  bindingLabel = '概率论 · 第 4 讲',
 }: {
   state: RecordingState;
   elapsedMs: number;
@@ -24,10 +25,11 @@ export function RecordingBar({
   assignmentEpoch: number;
   onToggle: () => void;
   onStop: () => void;
+  bindingLabel?: string;
 }) {
   const isRecording = state === 'recording';
   const isPaused = state === 'paused';
-  const label = isRecording ? '正在录音' : isPaused ? '已暂停' : state === 'interrupted' ? '录音中断' : '录音已停止';
+  const label = state === 'starting' ? '正在启动' : isRecording ? '正在录音' : isPaused ? '已暂停' : state === 'stopping' ? '正在封口' : state === 'interrupted' ? '录音中断' : state === 'failed' ? '录音失败' : '录音已停止';
 
   return (
     <div className="recording-bar" role="status" aria-live="polite">
@@ -40,13 +42,13 @@ export function RecordingBar({
         </span>
         <span className="recording-binding">
           <span className="recording-binding-label">课堂绑定</span>
-          <strong>概率论 · 第 4 讲</strong>
+          <strong>{bindingLabel}</strong>
           <span className="recording-epoch">epoch {assignmentEpoch}</span>
         </span>
       </div>
       <div className="recording-bar-trailing">
         <span className="watermark-label">已稳固 {Math.round(watermarkMs / 1000)}s</span>
-        <Button size="sm" variant={isRecording ? 'secondary' : 'primary'} onPress={onToggle}>
+        <Button size="sm" variant={isRecording ? 'secondary' : 'primary'} onPress={onToggle} isDisabled={state === 'starting' || state === 'stopping'}>
           <span aria-hidden="true" className={`button-glyph ${isRecording ? 'button-glyph-pause' : 'button-glyph-play'}`} />
           {isRecording ? '暂停' : isPaused ? '继续' : '开始'}
         </Button>

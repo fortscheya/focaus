@@ -115,7 +115,7 @@ export function ContentEditor({adapter}: {adapter: HostAdapter}) {
   const onCompositionEnd = () => {
     setCompositionActive(false);
     sendPatch(committedDraft.current, draft);
-    void adapter.invoke('correction.draft', {suggestion_id: 'composition-draft', draft, composition_active: false}, makeEnvelope('correction.draft'));
+    void adapter.invoke('correction.draft', {suggestion_id: '4c11a85f-f3da-4f4f-9701-000000000033', draft, composition_active: false}, makeEnvelope('correction.draft', undefined, {[ids.note]: ids.revision}));
   };
 
   const acceptSuggestion = (suggestion: CorrectionFixture) => {

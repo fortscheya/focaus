@@ -56,7 +56,7 @@ export function SearchPanel({
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [isComposing, setIsComposing] = useState(false);
   const [notice, setNotice] = useState('');
-  const [searchId, setSearchId] = useState('fixture-search-session');
+  const [searchId, setSearchId] = useState('4c11a85f-f3da-4f4f-9701-000000000032');
   const kind = viewToSearchKind(view);
 
   const coverageLabel = useMemo(() => {

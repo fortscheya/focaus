@@ -31,14 +31,15 @@ export type FixtureCommandResult = CommandResult & {
 };
 
 function id(prefix: string): string {
-  return `${prefix}-${crypto.randomUUID()}`;
+  void prefix;
+  return crypto.randomUUID();
 }
 
 export function setActiveWindowId(windowId: string): void {
   activeWindowId = windowId;
 }
 
-export function makeEnvelope(name: CommandName, windowId = activeWindowId): Omit<Command, 'name' | 'payload'> {
+export function makeEnvelope(name: CommandName, windowId = activeWindowId, expectedRevisions: Record<string, string> = {}): Omit<Command, 'name' | 'payload'> {
   const commandId = id('cmd');
   return {
     contract_version: CONTRACT_VERSION,
@@ -46,6 +47,7 @@ export function makeEnvelope(name: CommandName, windowId = activeWindowId): Omit
     actor: 'user',
     window_id: windowId,
     idempotency_key: `${name}:${commandId}`,
+    expected_revisions: expectedRevisions,
   };
 }
 
@@ -247,7 +249,7 @@ export async function bootstrapNativeRuntime(onEventBatch: (batch: EventBatch) =
   const stopEvents = await listen<EventBatch>('focaus://events', (event) => onEventBatch(event.payload));
   try {
     const openResponse = await adapter.invoke('state.open', {
-      scopes: [{kind: 'global'}, {kind: 'lesson', lesson_id: '4c11a85f-f3da-4f4f-9701-000000000002'}, {kind: 'view', view_id: '4c11a85f-f3da-4f4f-9701-000000000005'}],
+      scopes: [{kind: 'global'}],
       last_seq: null,
       capabilities: hostCapabilities,
     }, makeEnvelope('state.open'));
@@ -282,7 +284,8 @@ function fixtureEvaluation(input: VisualizationEvaluateInput): EvaluationResult 
   const inputPlane = parameters.input[0] ?? [];
   const kernelPlane = parameters.kernel[0] ?? [];
   const [strideY, strideX] = parameters.stride;
-  const [padTop, padRight, padBottom, padLeft] = parameters.padding;
+  // Registry order is [top, bottom, left, right], deliberately not CSS order.
+  const [padTop, padBottom, padLeft, padRight] = parameters.padding;
   const [dilationY, dilationX] = parameters.dilation;
   const kernelHeight = kernelPlane.length;
   const kernelWidth = kernelPlane[0]?.length ?? 0;
@@ -356,7 +359,7 @@ function fixtureEvaluation(input: VisualizationEvaluateInput): EvaluationResult 
     steps,
     validation: {
       checks: {schema: 'pass', source: 'pass', semantic: 'pass', math: 'pass'},
-      validator_version: 'fixture-n-1.0.0',
+      validator_version: '1.0.0',
       parameters_hash: 'a'.repeat(64),
       validated_revision: input.revision_id,
       diagnostics: ['fixture adapter: deterministic result; native N validator not called'],

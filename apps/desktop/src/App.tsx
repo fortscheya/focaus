@@ -1,7 +1,8 @@
-import {useCallback, useEffect, useMemo, useState} from 'react';
+import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import {Button} from '@heroui/react';
-import type {CommandName, EventBatch, HostAdapter, RecordingState} from '@focaus/contracts';
+import type {CommandName, CommandResult, Course, EventBatch, HostAdapter, Lesson, RecordingSession, RecordingState} from '@focaus/contracts';
 import {CourseWorkspace} from './components/CourseWorkspace.tsx';
+import {NativeWorkspace} from './components/NativeWorkspace.tsx';
 import {StartHome} from './components/StartHome.tsx';
 import {SearchPanel} from './search/SearchPanel.tsx';
 import {StatusBadge} from './components/StatusBadge.tsx';
@@ -14,7 +15,9 @@ import {
   makeEnvelope,
   setActiveWindowId,
   type HostRuntime,
+  type NativeRuntime,
 } from './app/hostAdapter.ts';
+import {SerialNativeEventQueue} from './app/nativeEventQueue.ts';
 import type {SearchResultView} from './search/searchIndex.ts';
 
 type Screen = 'home' | 'workspace';
@@ -29,20 +32,76 @@ function isRecordingState(value: unknown): value is RecordingState {
 }
 
 function readRecordingFromEvent(batch: EventBatch): RecordingState | null {
-  for (const event of batch.events) {
-    if (!event.event_type.startsWith('recording.') || !event.payload || typeof event.payload !== 'object') continue;
-    const state = (event.payload as Record<string, unknown>).state;
-    if (isRecordingState(state)) return state;
-  }
+  void batch;
   return null;
 }
 
-function extractRecordingFromSnapshot(snapshot: unknown): RecordingState | null {
-  if (!snapshot || typeof snapshot !== 'object') return null;
-  const global = (snapshot as {global?: unknown}).global;
-  if (!global || typeof global !== 'object') return null;
-  const candidate = (global as Record<string, unknown>).recording_state;
-  return isRecordingState(candidate) ? candidate : null;
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' ? value as Record<string, unknown> : null;
+}
+
+function safeHostErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'string') return error;
+  const record = asRecord(error);
+  const code = typeof record?.code === 'string' ? record.code : null;
+  const message = typeof record?.message === 'string' ? record.message : null;
+  if (code && message) return `${code}: ${message}`;
+  if (message) return message;
+  if (code) return code;
+  return 'native bootstrap returned an unknown safe error';
+}
+
+function parseCourse(value: unknown): Course | null {
+  const record = asRecord(value);
+  if (!record || typeof record.course_id !== 'string' || typeof record.name !== 'string' || typeof record.revision_id !== 'string' || typeof record.entity_seq !== 'number') return null;
+  return record as unknown as Course;
+}
+
+function parseLesson(value: unknown): Lesson | null {
+  const record = asRecord(value);
+  if (!record || typeof record.lesson_id !== 'string' || typeof record.course_id !== 'string' || typeof record.title !== 'string' || typeof record.revision_id !== 'string' || typeof record.entity_seq !== 'number') return null;
+  return record as unknown as Lesson;
+}
+
+function parseRecording(value: unknown): RecordingSession | null {
+  const record = asRecord(value);
+  if (!record || typeof record.recording_id !== 'string' || typeof record.state !== 'string' || !isRecordingState(record.state) || typeof record.assignment_epoch !== 'number' || typeof record.durable_watermark_ms !== 'number' || typeof record.revision_id !== 'string' || typeof record.entity_seq !== 'number') return null;
+  return record as unknown as RecordingSession;
+}
+
+function unwrapEntity(value: unknown, key: string): unknown {
+  const record = asRecord(value);
+  return record && key in record ? record[key] : value;
+}
+
+function firstRecord(records: unknown, key: string): unknown {
+  const record = asRecord(records);
+  const group = record ? asRecord(record[key]) : null;
+  return group ? Object.values(group)[0] : null;
+}
+
+function extractLibraryFromSnapshot(snapshot: unknown): {course: Course | null; lesson: Lesson | null; recording: RecordingSession | null} {
+  const record = asRecord(snapshot);
+  const global = record ? asRecord(record.global) : null;
+  const records = record?.records;
+  return {
+    course: parseCourse(global?.course) ?? parseCourse(firstRecord(records, 'courses')),
+    lesson: parseLesson(global?.lesson) ?? parseLesson(firstRecord(records, 'lessons')),
+    recording: parseRecording(global?.recording) ?? parseRecording(global?.recording_session) ?? parseRecording(firstRecord(records, 'recordings')),
+  };
+}
+
+function parseRecordingResponse(result: unknown): RecordingSession | null {
+  return parseRecording(unwrapEntity(result, 'recording')) ?? parseRecording(unwrapEntity(result, 'session')) ?? parseRecording(result);
+}
+
+function parseCourseResponse(result: unknown): Course | null {
+  return parseCourse(unwrapEntity(result, 'course')) ?? parseCourse(result);
+}
+
+function parseLessonResponse(result: unknown): Lesson | null {
+  return parseLesson(unwrapEntity(result, 'lesson')) ?? parseLesson(result);
 }
 
 export function App() {
@@ -53,6 +112,9 @@ export function App() {
   const [bootPhase, setBootPhase] = useState(fixtureRequested ? 'fixture mode' : 'connecting to focaus_bootstrap');
   const [eventSeq, setEventSeq] = useState(0);
   const [screen, setScreen] = useState<Screen>('home');
+  const [course, setCourse] = useState<Course | null>(null);
+  const [lesson, setLesson] = useState<Lesson | null>(null);
+  const [recordingSession, setRecordingSession] = useState<RecordingSession | null>(null);
   const [selectedViewId, setSelectedViewId] = useState(workspaceViews[0].id);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchNotice, setSearchNotice] = useState('');
@@ -62,12 +124,106 @@ export function App() {
   const [watermarkMs, setWatermarkMs] = useState(initialRecording.watermarkMs);
   const [moveState, setMoveState] = useState<'grid' | 'preparing' | 'detached'>('grid');
   const [nativeNotice, setNativeNotice] = useState('');
+  const nativeRuntimeRef = useRef<NativeRuntime | null>(null);
+  const pendingEventBatches = useRef<EventBatch[]>([]);
+  const failedNativeBatch = useRef<EventBatch | null>(null);
+  const bufferedAfterFailure = useRef<EventBatch[]>([]);
+  const nativeEventQueue = useRef(new SerialNativeEventQueue());
+  const courseRef = useRef<Course | null>(null);
+  const lessonRef = useRef<Lesson | null>(null);
+  const recordingRef = useRef<RecordingSession | null>(null);
+
+  useEffect(() => { courseRef.current = course; }, [course]);
+  useEffect(() => { lessonRef.current = lesson; }, [lesson]);
+  useEffect(() => { recordingRef.current = recordingSession; }, [recordingSession]);
+
+  const processNativeEventBatch = useCallback((batch: EventBatch) => {
+    const scheduled = nativeEventQueue.current.enqueue(batch, async (nextBatch) => {
+      const activeRuntime = nativeRuntimeRef.current;
+      if (!activeRuntime) throw new Error('native runtime disappeared before event projection');
+      for (const event of nextBatch.events) {
+        const isNormalEntityEvent = event.event_type.startsWith('recording.') || event.event_type.startsWith('course.') || event.event_type.startsWith('lesson.') || event.event_type.startsWith('content.');
+        const isKnownProjectionEvent = event.event_type.startsWith('view.') || event.event_type.startsWith('search.') || event.event_type.startsWith('task.') || event.event_type.startsWith('visualization.') || event.event_type.startsWith('focaus.') || event.event_type.startsWith('progress.') || event.event_type.startsWith('material.') || event.event_type.startsWith('language.') || event.event_type.startsWith('state.');
+        if (!isNormalEntityEvent && !isKnownProjectionEvent) throw new Error(`未知 native event type：${event.event_type}；未 ACK，等待重试或重新 state.open`);
+        if (isKnownProjectionEvent && !isNormalEntityEvent) {
+          setNativeNotice(`已路由 ${event.event_type} projection 事件；当前 native 内容等待宿主投影读取。`);
+          continue;
+        }
+        const affectsProjection = isNormalEntityEvent;
+        if (!affectsProjection) continue;
+        const isDeleted = event.event_type.includes('deleted') || event.event_type.includes('removed');
+        if (isDeleted) {
+          if (recordingRef.current?.recording_id === event.entity_id) {
+            recordingRef.current = null;
+            setRecordingSession(null);
+            setRecordingState('stopped');
+          }
+          if (courseRef.current?.course_id === event.entity_id) {
+            courseRef.current = null;
+            setCourse(null);
+          }
+          if (lessonRef.current?.lesson_id === event.entity_id) {
+            lessonRef.current = null;
+            setLesson(null);
+          }
+          continue;
+        }
+        const response = await activeRuntime.adapter.invoke('content.get', {entity_id: event.entity_id, revision_id: event.revision_id, selector: null}, makeEnvelope('content.get'));
+        if (response.status === 'error') throw new Error(`事件 ${event.event_type} 的 content.get 失败：${response.error?.message ?? response.error?.code ?? 'unknown error'}`);
+        if (event.event_type.startsWith('recording.')) {
+          const nextRecording = parseRecordingResponse(response.result);
+          if (!nextRecording) throw new Error(`事件 ${event.event_type} 的 content.get 未返回合法 RecordingSession`);
+          recordingRef.current = nextRecording;
+          setRecordingSession(nextRecording);
+          setRecordingState(nextRecording.state);
+        } else if (event.event_type.startsWith('course.')) {
+          const nextCourse = parseCourseResponse(response.result);
+          if (!nextCourse) throw new Error(`事件 ${event.event_type} 的 content.get 未返回合法 Course`);
+          courseRef.current = nextCourse;
+          setCourse(nextCourse);
+        } else if (event.event_type.startsWith('lesson.')) {
+          const nextLesson = parseLessonResponse(response.result);
+          if (!nextLesson) throw new Error(`事件 ${event.event_type} 的 content.get 未返回合法 Lesson`);
+          lessonRef.current = nextLesson;
+          setLesson(nextLesson);
+        }
+      }
+      const ack = await activeRuntime.adapter.invoke('state.ack', {subscription_id: activeRuntime.state.subscription_id, upto_seq: nextBatch.through_seq}, makeEnvelope('state.ack'));
+      if (ack.status === 'error') throw new Error(`state.ack 失败：${ack.error?.message ?? ack.error?.code ?? 'unknown error'}`);
+      setEventSeq(nextBatch.through_seq);
+    });
+    void scheduled.catch((error: unknown) => {
+      if (!failedNativeBatch.current) failedNativeBatch.current = batch;
+      setNativeNotice(`事件批次 ${batch.through_seq} 未确认：${error instanceof Error ? error.message : String(error)}。未 ACK，可重试。`);
+    });
+    return scheduled;
+  }, []);
 
   const handleEventBatch = useCallback((batch: EventBatch) => {
-    setEventSeq(batch.through_seq);
-    const nextRecordingState = readRecordingFromEvent(batch);
-    if (nextRecordingState) setRecordingState(nextRecordingState);
-  }, []);
+    if (!nativeRuntimeRef.current) {
+      pendingEventBatches.current.push(batch);
+      setEventSeq(batch.through_seq);
+      return;
+    }
+    if (nativeEventQueue.current.blocked) {
+      bufferedAfterFailure.current.push(batch);
+      setNativeNotice(`事件批次 ${batch.through_seq} 已排队；前一批未 ACK，先重试失败批次。`);
+      return;
+    }
+    processNativeEventBatch(batch);
+  }, [processNativeEventBatch]);
+
+  const retryNativeEvents = useCallback(() => {
+    const failed = failedNativeBatch.current;
+    if (!failed) return;
+    failedNativeBatch.current = null;
+    nativeEventQueue.current.reset();
+    void processNativeEventBatch(failed).then(() => {
+      const buffered = bufferedAfterFailure.current;
+      bufferedAfterFailure.current = [];
+      buffered.forEach((batch) => processNativeEventBatch(batch));
+    }).catch(() => undefined);
+  }, [processNativeEventBatch]);
 
   useEffect(() => {
     let alive = true;
@@ -86,22 +242,32 @@ export function App() {
           nextRuntime.stopEvents();
           return;
         }
+        nativeRuntimeRef.current = nextRuntime;
         setRuntime(nextRuntime);
         setEventSeq(nextRuntime.state.snapshot_seq);
-        const snapshotRecordingState = extractRecordingFromSnapshot(nextRuntime.state.snapshot);
-        if (snapshotRecordingState) setRecordingState(snapshotRecordingState);
+        const library = extractLibraryFromSnapshot(nextRuntime.state.snapshot);
+        courseRef.current = library.course;
+        lessonRef.current = library.lesson;
+        recordingRef.current = library.recording;
+        setCourse(library.course);
+        setLesson(library.lesson);
+        setRecordingSession(library.recording);
+        if (library.recording) setRecordingState(library.recording.state);
+        const buffered = pendingEventBatches.current;
+        pendingEventBatches.current = [];
+        buffered.forEach(processNativeEventBatch);
         setBootPhase(`state.open → snapshot ${nextRuntime.state.snapshot_seq} → state.ack → events ready`);
       })
       .catch((error: unknown) => {
         if (!alive) return;
-        setBootError(error instanceof Error ? error.message : String(error));
+        setBootError(safeHostErrorMessage(error));
         setBootPhase('native bootstrap failed');
       });
     return () => {
       alive = false;
       stopEvents?.();
     };
-  }, [fixtureAdapter, fixtureRequested, handleEventBatch]);
+  }, [fixtureAdapter, fixtureRequested, handleEventBatch, processNativeEventBatch]);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -110,19 +276,20 @@ export function App() {
   }, [theme]);
 
   useEffect(() => {
+    if (runtime?.mode !== 'fixture') return;
     if (recordingState !== 'recording') return;
     const interval = window.setInterval(() => {
       setElapsedMs((current) => current + 1000);
       setWatermarkMs((current) => current + 1000);
     }, 1000);
     return () => window.clearInterval(interval);
-  }, [recordingState]);
+  }, [recordingState, runtime?.mode]);
 
   const adapter: HostAdapter = runtime?.adapter ?? fixtureAdapter;
   const selectedView = workspaceViews.find((view) => view.id === selectedViewId) ?? workspaceViews[0];
 
-  const invoke = useCallback(async <N extends CommandName>(name: N, payload: Parameters<HostAdapter['invoke']>[1]): Promise<Awaited<ReturnType<HostAdapter['invoke']>>> => {
-    return adapter.invoke(name, payload as never, makeEnvelope(name));
+  const invoke = useCallback(async <N extends CommandName>(name: N, payload: unknown, expectedRevisions: Record<string, string> = {}): Promise<CommandResult> => {
+    return adapter.invoke(name, payload as never, makeEnvelope(name, undefined, expectedRevisions));
   }, [adapter]);
 
   const updateRecordingFixture = (nextState: RecordingState) => {
@@ -130,15 +297,54 @@ export function App() {
     if (nextState === 'recording' && recordingState === 'stopped') setElapsedMs(0);
   };
 
+  const createCourseLesson = async (courseName: string, lessonTitle: string) => {
+    if (runtime?.mode !== 'native') return;
+    setNativeNotice('正在提交 course.create；课程 ID 与 revision 只采用宿主响应。');
+    const courseResponse = await invoke('course.create', {name: courseName}, {});
+    if (courseResponse.status === 'error') {
+      setNativeNotice(`真实宿主拒绝 course.create：${courseResponse.error?.message ?? courseResponse.error?.code ?? 'unknown error'}`);
+      return;
+    }
+    const createdCourse = parseCourseResponse(courseResponse.result);
+    if (!createdCourse) {
+      setNativeNotice('course.create 返回缺少合法 Course；没有本地补造课程。');
+      return;
+    }
+    setCourse(createdCourse);
+    setNativeNotice('course.create 已确认，正在提交 lesson.create。');
+    const lessonResponse = await invoke('lesson.create', {course_id: createdCourse.course_id, title: lessonTitle, actual_date: null, timezone: 'Asia/Shanghai'}, {});
+    if (lessonResponse.status === 'error') {
+      setNativeNotice(`真实宿主拒绝 lesson.create：${lessonResponse.error?.message ?? lessonResponse.error?.code ?? 'unknown error'}`);
+      return;
+    }
+    const createdLesson = parseLessonResponse(lessonResponse.result);
+    if (!createdLesson) {
+      setNativeNotice('lesson.create 返回缺少合法 Lesson；保留已确认课程，不补造课堂。');
+      return;
+    }
+    setLesson(createdLesson);
+    setScreen('workspace');
+    setNativeNotice('课程与课堂均已由宿主确认；现在可以提交 recording.start。');
+  };
+
   const startRecording = async () => {
     setScreen('workspace');
     setNativeNotice('');
     if (runtime?.mode === 'native') {
       setRecordingState('starting');
-      const response = await invoke('recording.start', {lesson_id: ids.lesson, device_id: null});
+      const response = await invoke('recording.start', {lesson_id: lesson?.lesson_id ?? null, device_id: null});
       if (response.status === 'error') {
         setRecordingState('failed');
         setNativeNotice(`真实宿主拒绝 recording.start：${response.error?.message ?? response.error?.code ?? 'unknown error'}`);
+      } else if (response.status === 'ok') {
+        const nextRecording = parseRecordingResponse(response.result);
+        if (nextRecording) {
+          setRecordingSession(nextRecording);
+          setRecordingState(nextRecording.state);
+          setNativeNotice('宿主已返回 recording session；后续水位只随 durable_watermark_ms 更新。');
+        } else {
+          setNativeNotice('recording.start 返回 ok 但缺少 RecordingSession；等待事件补读，未在前端伪造录音状态。');
+        }
       } else {
         setNativeNotice('recording.start 已提交，等待 recording.changed 事件确认采集状态；前端不假装已开始。');
       }
@@ -155,12 +361,16 @@ export function App() {
     if (!name) return;
     setNativeNotice('');
     if (runtime?.mode === 'native') {
-      const response = await invoke(name, {recording_id: ids.recording, expected_state: recordingState});
+      if (!recordingSession) {
+        setNativeNotice(`真实宿主尚未返回 recording_id，无法提交 ${name}。`);
+        return;
+      }
+      const response = await invoke(name, {recording_id: recordingSession.recording_id, expected_state: recordingState}, {[recordingSession.recording_id]: recordingSession.revision_id});
       if (response.status === 'error') setNativeNotice(`真实宿主拒绝 ${name}：${response.error?.message ?? response.error?.code ?? 'unknown error'}`);
       else setNativeNotice(`${name} 已提交，等待宿主事件确认；UI 不在 native 模式本地伪造状态。`);
       return;
     }
-    const response = await invoke(name, {recording_id: ids.recording, expected_state: recordingState});
+    const response = await invoke(name, {recording_id: ids.recording, expected_state: recordingState}, {[ids.recording]: '4c11a85f-f3da-4f4f-9701-000000000007'});
     if (response.status === 'error') setNativeNotice(response.error?.message ?? `${name} failed`);
     else updateRecordingFixture(recordingState === 'recording' ? 'paused' : 'recording');
   };
@@ -169,24 +379,28 @@ export function App() {
     if (recordingState === 'stopped') return;
     if (runtime?.mode === 'native') {
       setRecordingState('stopping');
-      const response = await invoke('recording.stop', {recording_id: ids.recording, expected_state: recordingState});
+      if (!recordingSession) {
+        setNativeNotice('真实宿主尚未返回 recording_id，无法提交 recording.stop。');
+        return;
+      }
+      const response = await invoke('recording.stop', {recording_id: recordingSession.recording_id, expected_state: recordingState}, {[recordingSession.recording_id]: recordingSession.revision_id});
       if (response.status === 'error') {
         setRecordingState('failed');
         setNativeNotice(`真实宿主拒绝 recording.stop：${response.error?.message ?? response.error?.code ?? 'unknown error'}`);
       } else setNativeNotice('recording.stop 已提交，等待 stopped 事件封口。');
       return;
     }
-    const response = await invoke('recording.stop', {recording_id: ids.recording, expected_state: recordingState});
+    const response = await invoke('recording.stop', {recording_id: ids.recording, expected_state: recordingState}, {[ids.recording]: '4c11a85f-f3da-4f4f-9701-000000000007'});
     if (response.status === 'error') setNativeNotice(response.error?.message ?? 'fixture stop failed');
     else updateRecordingFixture('stopped');
   };
 
   const moveView = async () => {
     if (moveState === 'preparing') return;
-    const targetWindowId = moveState === 'detached' ? null : 'fixture-detached-window';
+    const targetWindowId = moveState === 'detached' ? null : ids.detachedWindow;
     setMoveState('preparing');
     setNativeNotice('');
-    const response = await invoke('view.move', {view_id: ids.view, target_window_id: targetWindowId, base_view_revision: 'fixture-view-revision-04'});
+    const response = await invoke('view.move', {view_id: ids.view, target_window_id: targetWindowId, base_view_revision: ids.viewRevision}, {[ids.view]: ids.viewRevision});
     if (response.status === 'error') {
       setMoveState(moveState === 'detached' ? 'detached' : 'grid');
       setNativeNotice(`view.move 失败：${response.error?.message ?? response.error?.code ?? 'unknown error'}；原承载保留。`);
@@ -197,7 +411,7 @@ export function App() {
       return;
     }
     window.setTimeout(async () => {
-      const ready = await invoke('view.ready', {transfer_id: 'fixture-transfer-01', view_revision: 'fixture-view-revision-04'});
+      const ready = await invoke('view.ready', {transfer_id: ids.transfer, view_revision: ids.viewRevision}, {[ids.view]: ids.viewRevision});
       if (ready.status === 'error') {
         setMoveState(moveState === 'detached' ? 'detached' : 'grid');
         setNativeNotice('view.ready 失败；已回滚到原承载，没有重复任务。');
@@ -241,6 +455,10 @@ export function App() {
   const isNativeRuntime = activeRuntime.mode === 'native';
   const snapshotSeq = isNativeRuntime ? activeRuntime.state.snapshot_seq : 0;
 
+  if (isNativeRuntime) {
+    return <NativeWorkspace course={course} lesson={lesson} recording={recordingSession} eventSeq={eventSeq} snapshotSeq={snapshotSeq} notice={nativeNotice} screen={screen} onCreateCourseLesson={createCourseLesson} onOpenWorkspace={() => setScreen('workspace')} onBack={() => setScreen('home')} onToggleRecording={() => void toggleRecording()} onStopRecording={() => void stopRecording()} onStartUnassigned={() => void startRecording()} onRetryEvents={retryNativeEvents} />;
+  }
+
   return (
     <div className={`app-shell mode-${isNativeRuntime ? 'native' : 'fixture'}`}>
       <header className="app-topbar">
@@ -248,7 +466,7 @@ export function App() {
         <div className="app-topbar-status"><StatusBadge tone={isNativeRuntime ? 'success' : 'warning'} dot={isNativeRuntime}>{isNativeRuntime ? `native · snapshot ${snapshotSeq}` : 'fixture · 显式审查模式'}</StatusBadge>{nativeNotice ? <span className="topbar-notice">{nativeNotice}</span> : null}</div>
         <div className="app-topbar-actions"><Button size="sm" variant="ghost" onPress={() => setSearchOpen(true)} isDisabled={screen !== 'workspace'}>⌘ F <span className="topbar-action-text">搜索当前窗</span></Button><Button size="sm" variant="ghost" onPress={() => setTheme(theme === 'system' ? 'dark' : theme === 'dark' ? 'light' : 'system')} aria-label={`切换主题，当前为${theme}`}>{theme === 'dark' ? '深色' : theme === 'light' ? '浅色' : '系统'}</Button></div>
       </header>
-      {screen === 'home' ? <StartHome recordingState={recordingState} onStartRecording={() => void startRecording()} onOpenWorkspace={() => setScreen('workspace')} /> : <div className="workspace-layout"><CourseWorkspace adapter={adapter} selectedView={selectedView} onSelectView={(view) => setSelectedViewId(view.id)} recordingState={recordingState} elapsedMs={elapsedMs} watermarkMs={watermarkMs} assignmentEpoch={initialRecording.assignmentEpoch} onToggleRecording={() => void toggleRecording()} onStopRecording={() => void stopRecording()} moveState={moveState} onMoveView={() => void moveView()} onBack={() => setScreen('home')} mode={isNativeRuntime ? 'native' : 'fixture'} eventSeq={eventSeq} /><SearchPanel open={searchOpen} view={selectedView} adapter={adapter} onClose={() => setSearchOpen(false)} onLocate={locateSearchResult} /></div>}
+      {screen === 'home' ? <StartHome recordingState={recordingState} onStartRecording={() => void startRecording()} onOpenWorkspace={() => setScreen('workspace')} /> : <div className="workspace-layout"><CourseWorkspace adapter={adapter} selectedView={selectedView} onSelectView={(view) => setSelectedViewId(view.id)} recordingState={recordingState} elapsedMs={elapsedMs} watermarkMs={watermarkMs} assignmentEpoch={initialRecording.assignmentEpoch} onToggleRecording={() => void toggleRecording()} onStopRecording={() => void stopRecording()} moveState={moveState} onMoveView={() => void moveView()} onBack={() => setScreen('home')} mode="fixture" eventSeq={eventSeq} /><SearchPanel open={searchOpen} view={selectedView} adapter={adapter} onClose={() => setSearchOpen(false)} onLocate={locateSearchResult} /></div>}
       {searchNotice ? <div className="floating-notice" role="status">{searchNotice}<Button size="sm" variant="ghost" onPress={() => setSearchNotice('')}>知道了</Button></div> : null}
       <footer className="app-footer"><span>契约 {hostCapabilities.supported_contract_majors[0]}.0.0 · 资料 focaus.material/2.0.0 · 组件 focaus.visualization/1.0.0</span><span>{isNativeRuntime ? '事件通道 focaus://events 已订阅' : '浏览器审查：所有外部操作均为 fixture'}</span></footer>
     </div>

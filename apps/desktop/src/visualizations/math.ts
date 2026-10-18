@@ -40,7 +40,8 @@ export function evaluateConv2d(parameters: Conv2dParameters, interactionSeq: num
   const kernelHeight = kernel.length;
   const kernelWidth = kernel[0]?.length ?? 0;
   const [strideY, strideX] = parameters.stride;
-  const [padTop, padRight, padBottom, padLeft] = parameters.padding;
+  // Registry order is [top, bottom, left, right], deliberately not CSS order.
+  const [padTop, padBottom, padLeft, padRight] = parameters.padding;
   const [dilationY, dilationX] = parameters.dilation;
   const effectiveHeight = dilationY * (kernelHeight - 1) + 1;
   const effectiveWidth = dilationX * (kernelWidth - 1) + 1;
