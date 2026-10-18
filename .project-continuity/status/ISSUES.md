@@ -2,6 +2,7 @@
 # Issues
 
 ## Open
+- I38［Demo与真实ASR边界］2026-10-18用户要求一小时内优先可演示功能；当前 `?demo=1` 可打开本地麦克风并计数 chunk，文字由本地定制 sentence adapter 增量回放。未把音频发送到 `qwen-audio-3.1-asr-flash-streaming`，因此未验证真实语音驱动字幕、云延迟或识别质量；真实云调用/上传/费用仍需具体授权。
 - I33［实际本地抽取限制］L08/L09各2页无可用文字层，搜索覆盖partial；deep公式为候选，未证明复杂图表/公式语义重构。具体统计见docs/DEVELOPMENT.md，后续N托管/索引和F原文定位尚待接通。
 - I34［运行验收缺口］Tauri native-shell编译和真实NativeHost双窗口集成已通过，macOS实际窗口/权限/设备/长录音未测；F首批fixture展示不算native产品链，正在分离。
 - I32［本地资产验证］ffmpeg9.0.1可将两份qta AAC轨独立全程解码到null；APAC均明确no decoder found，属此工具解码能力缺口，不能认定原件损坏/无收益。未试听、选轨或内容对齐；后续可测Apple本机解码能力，原件保留。

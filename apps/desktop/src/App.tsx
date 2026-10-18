@@ -3,6 +3,7 @@ import {Button} from '@heroui/react';
 import type {CommandName, CommandResult, ContentView, Course, EventBatch, HostAdapter, Lesson, RecordingSession, RecordingState} from '@focaus/contracts';
 import {CourseWorkspace} from './components/CourseWorkspace.tsx';
 import {NativeWorkspace} from './components/NativeWorkspace.tsx';
+import {DemoWorkspace} from './demo/DemoWorkspace.tsx';
 import {StartHome} from './components/StartHome.tsx';
 import {SearchPanel} from './search/SearchPanel.tsx';
 import {StatusBadge} from './components/StatusBadge.tsx';
@@ -28,6 +29,10 @@ type Theme = 'system' | 'light' | 'dark';
 
 function isFixtureRequested(): boolean {
   return new URLSearchParams(window.location.search).get('fixture') === '1';
+}
+
+function isDemoRequested(): boolean {
+  return new URLSearchParams(window.location.search).get('demo') === '1';
 }
 
 function isRecordingState(value: unknown): value is RecordingState {
@@ -141,6 +146,8 @@ function extractProjectionsFromSnapshot(snapshot: unknown): Record<string, Nativ
 }
 
 export function App() {
+  const demoRequested = useMemo(isDemoRequested, []);
+  if (demoRequested) return <DemoWorkspace />;
   const fixtureRequested = useMemo(isFixtureRequested, []);
   const fixtureAdapter = useMemo(() => new FixtureHostAdapter(), []);
   const [runtime, setRuntime] = useState<HostRuntime | null>(null);

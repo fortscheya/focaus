@@ -1,6 +1,7 @@
 # Current State
 
 ## Active Development
+- 2026-10-18 Demo短期范围：`apps/desktop/src/demo/DemoWorkspace.tsx` 接入 `?demo=1`，覆盖本地麦克风采集和本地 sentence 回放、选段入课件、来源跳转、L08 课件重构示例、2D 卷积对象及二次转写订正。当前可演示链不调用云模型、不上传音频。
 - 2026-10-18 D167–D171：后续开发获授权；G0初始3312e4e、G1共同d9a8cdf6已提交。四个独立Codex App会话和worktree已建立，均请求gpt-6.1-sol/max且工具接受，运行配置字段未独立读回。详见docs/DEVELOPMENT.md。
 - 当前codex/focaus-integration代码整合至0ced003，已整合F的真实录音事件/CAS、Unicode/数学、coverage包装、ContentView和content.get投影，N的资料原件托管/原子搜索投影及R0原声登记隔离，A runtime以及E sidecar；未执行push/rebase/发布。
 - D170授权本地merge/cherry-pick和契约同步，不含rebase/push/发布/删除分支或worktree；四路任务与报告消息已获授权。
@@ -22,6 +23,7 @@
 - 整合后验证：cargo workspace 42项相关测试、native harness19项、资料10项、TS契约37项、桌面Vitest7项及构建均通过；warning仅为未使用的内部require_receipt方法。
 - 最新整合后验证：cargo workspace 42项、native harness28项、资料引擎10项、TS契约37项、桌面Vitest9项、typecheck/build均通过；N R0 的真实生产 write_loop/SQLite持锁/journal恢复测试包含在28项内。
 - 最终签名App复验：同一库的真实课程窗显示3个宿主ContentView和CONTENT.GET PROJECTION；因无已提交正文，面板显示`empty`，未填充fixture。最终App启动、恢复、签名和workspace_hygiene均通过。
+- Demo 本地验证：上一轮 `pnpm --dir apps/desktop typecheck`、`test`（6文件/12项）和 `build` 均通过；构建仅有 bundle 超过 500 kB 的提示。`curl -I http://127.0.0.1:1420/?demo=1` 返回 HTTP 200。浏览器视觉检查未完成，不能据此声称 macOS 窗口全链路验收。
 
 ## Pending / Unverified
 - G2仍未完成关窗继续录音、长录音恢复、真实资料导入UI、有资料后的真实Command+F命中以及编辑/引用/对象的端到端验收；content.get投影代码已接线，但不能由模块测试或空索引关闭完整内容验收。
@@ -29,3 +31,4 @@
 - 用户提供真实课件目录/Users/pitr/Desktop/SKD/DeepLearning，L08/L09原始PDF清单在evaluation/courseware-assets.json；未根据文件编号绑定qta，不把旧转写作为真值。
 - 云调用/上传/费用未获本阶段具体授权；密钥未读取，后续只宿主安全存储解析四槽位。公开endpoint/服务可用性与实际配置需分别确认。
 - development-guide及原文复制、原课件/录音/派生大文件/凭据/本机状态不入Git；真实L08/L09只读派生仍在.local；grilling完成不重开。
+- Demo 仍未验证真实音频内容驱动字幕、真实 qwen streaming、云端二次转写、决策进度、关窗继续和长录音恢复；Demo sentence 仅用于可审查演示功能连接。

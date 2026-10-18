@@ -17,6 +17,11 @@
 - 四路已通过create_thread创建，实际路径/分支/基线已核验，完整§7.2–7.5任务与原样消息授权已下发；真实ID/host/path和配置证据见docs/DEVELOPMENT.md。总控唯一维护公共文件与continuity，持续read_thread/wait_threads复核并整合。
 - 产品模型/专用凭据继续INTERFACES §9.1，真实云调用/上传尚未获本阶段明确授权。qta先本地轨道核验与内容对齐，不按编号配课、不混轨、旧转写非真值。
 
+## Active: One-hour Local Demo (D174)
+- Demo route `?demo=1` is implemented in the desktop app for the user's immediate walkthrough: local microphone capture with local sentence replay, source selection and courseware insertion, transcript/courseware navigation, L08 convolution reconstruction, 2D object interaction, and secondary transcript correction.
+- The route uses only local curated DeepLearning-derived sample text. It visibly states local Demo data, does not upload audio, and does not invoke the four cloud models. This is a reviewable UI/demo path, not real ASR or full product acceptance.
+- Next: commit the demo after diff/build checks, then run a visible route check if the existing Vite server is available. Keep real streaming ASR behind the previously stated cloud/data/cost authorization boundary.
+
 ## Later / Explicitly Deferred
 - 系统声音在麦克风/已有录音闭环后；Web/iOS联动、按实际课次自动组织、终端用户服务配置、长期隐私留存策略后续。
 - 首版不规划录音以外离线能力，不处理课件音视频/外链内容；不实现转场/逐步播放。
