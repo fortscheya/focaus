@@ -8,18 +8,30 @@ use tauri::{Emitter, Manager};
 struct RuntimeState {
     host: Arc<NativeHost>,
     window_ids: Mutex<HashMap<String, String>>,
+    view_contexts: Mutex<HashMap<String, ViewContext>>,
+}
+#[derive(Clone, Serialize)]
+struct ViewContext {
+    view_id: String,
+    transfer_id: Option<String>,
+    base_view_revision: Option<String>,
 }
 #[derive(Serialize)]
-struct Bootstrap { window_id: String, contract_version: &'static str }
+struct Bootstrap { window_id: String, contract_version: &'static str, view_context: Option<ViewContext> }
 
 #[tauri::command]
 fn focaus_bootstrap(window: tauri::WebviewWindow, state: tauri::State<'_, RuntimeState>) -> Result<Bootstrap, SafeError> {
     let mut ids = state.window_ids.lock().map_err(|_| internal_error())?;
-    let id = ids.entry(window.label().to_owned()).or_insert_with(|| uuid::Uuid::new_v4().to_string()).clone();
+    let id = if let Some(id) = ids.get(window.label()) { id.clone() } else {
+        let id = if window.label() == "main" { state.host.views.persistent_window_id("main", None)? }
+            else { return Err(internal_error()); };
+        ids.insert(window.label().into(), id.clone()); id
+    };
     // Labels and IDs are issued by the native process. Remote navigation is disallowed.
     let scope: Scope = serde_json::from_value(serde_json::json!({"kind":"global"})).map_err(|_| internal_error())?;
     state.host.bind_window(window.label(), &id, vec![scope])?;
-    Ok(Bootstrap { window_id: id, contract_version: CONTRACT_VERSION })
+    let view_context = state.view_contexts.lock().map_err(|_| internal_error())?.get(window.label()).cloned();
+    Ok(Bootstrap { window_id: id, contract_version: CONTRACT_VERSION, view_context })
 }
 
 #[tauri::command]
@@ -30,11 +42,102 @@ async fn focaus_command(window: tauri::WebviewWindow, state: tauri::State<'_, Ru
     // Synchronous SQLite transactions and validation never run on the UI thread.
     let should_exit = matches!(&command.name, focaus_contracts::CommandName::AppExit);
     let command_name = command.name.clone();
+    let payload = command.payload.clone();
     let result = tauri::async_runtime::spawn_blocking(move || host.dispatch_webview(&label, command))
         .await.map_err(|_| internal_error())??;
     crate::wire::validate_command_result(&command_name, &result)?;
+    if result.status == focaus_contracts::CommandResultStatus::Ok {
+        apply_window_result(window.app_handle(), &state, &command_name, &payload, &result)?;
+    }
     if should_exit && result.status == focaus_contracts::CommandResultStatus::Ok { window.app_handle().exit(0); }
     Ok(result)
+}
+
+/// OS effects follow the committed native transaction. The renderer cannot
+/// choose labels or inject a window identity, and failed preparation rolls back.
+fn apply_window_result(app: &tauri::AppHandle, state: &RuntimeState, name: &focaus_contracts::CommandName,
+    payload: &serde_json::Value, result: &CommandResult) -> Result<(), SafeError> {
+    use focaus_contracts::{CommandName, ContentView, ViewTransfer, ViewTransferState};
+    let body = result.result.clone().ok_or_else(internal_error)?;
+    match name {
+        CommandName::ViewOpen if payload["placement"] == "standalone" => {
+            let view: ContentView = serde_json::from_value(body).map_err(|_| internal_error())?;
+            let context = ViewContext { view_id: view.view_id.clone(), transfer_id: None, base_view_revision: None };
+            if ensure_view_window(app, state, &view.host_window_id, context, true).is_err() {
+                state.host.views.initial_host_failed(&view.view_id, &view.host_window_id)?;
+                return Err(internal_error());
+            }
+            state.host.views.confirm_initial_view(&view.view_id, &view.host_window_id)?;
+        }
+        CommandName::ViewMove => {
+            let transfer: ViewTransfer = serde_json::from_value(body).map_err(|_| internal_error())?;
+            let current = state.host.store.read(|c| crate::windows::get_transfer(c, &transfer.transfer_id))?;
+            if current.state != ViewTransferState::Preparing { return Ok(()); }
+            let context = ViewContext { view_id: transfer.view_id.clone(), transfer_id: Some(transfer.transfer_id.clone()), base_view_revision: Some(transfer.base_view_revision.clone()) };
+            let created = match ensure_view_window(app, state, &transfer.target_window_id, context, true) {
+                Ok(created) => created,
+                Err(_) => { state.host.views.rollback_transfer(&transfer.transfer_id)?; return Err(internal_error()); }
+            };
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(Duration::from_secs(10)).await;
+                let state = app.state::<RuntimeState>();
+                let rolled_back = state.host.store.write(|t| {
+                    let current = crate::windows::get_transfer(t, &transfer.transfer_id)?;
+                    if current.state != ViewTransferState::Preparing { return Ok(false); }
+                    crate::windows::rollback(t, &transfer.transfer_id)?;
+                    Ok(true)
+                }).unwrap_or(false);
+                if rolled_back && created {
+                    let label = format!("view-{}", transfer.target_window_id);
+                    if let Some(window) = app.get_webview_window(&label) { let _ = window.destroy(); }
+                }
+            });
+        }
+        CommandName::ViewReady => {
+            let transfer: ViewTransfer = serde_json::from_value(body).map_err(|_| internal_error())?;
+            if transfer.state == ViewTransferState::Committed {
+                let mut contexts = state.view_contexts.lock().map_err(|_| internal_error())?;
+                for context in contexts.values_mut().filter(|c| c.transfer_id.as_deref() == Some(&transfer.transfer_id)) {
+                    context.transfer_id = None; context.base_view_revision = None;
+                }
+                drop(contexts);
+                // A detached source is a one-view carrier; the main window stays.
+                if let Some(old) = app.get_webview_window(&format!("view-{}", transfer.source_window_id)) { let _ = old.destroy(); }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn ensure_view_window(app: &tauri::AppHandle, state: &RuntimeState, window_id: &str, context: ViewContext, standalone: bool) -> Result<bool, SafeError> {
+    let existing = state.window_ids.lock().map_err(|_| internal_error())?.iter()
+        .find(|(_, id)| id.as_str() == window_id).map(|(label, _)| label.clone());
+    if let Some(label) = existing {
+        if let Some(window) = app.get_webview_window(&label) {
+            state.view_contexts.lock().map_err(|_| internal_error())?.insert(label.clone(), context.clone());
+            window.emit("focaus://view-transfer", &context).map_err(|_| internal_error())?;
+            window.show().map_err(|_| internal_error())?;
+            return Ok(false);
+        }
+    }
+    let label = format!("{}-{window_id}", if standalone { "view" } else { "course" });
+    state.window_ids.lock().map_err(|_| internal_error())?.insert(label.clone(), window_id.into());
+    state.view_contexts.lock().map_err(|_| internal_error())?.insert(label.clone(), context);
+    let scope: Scope = serde_json::from_value(serde_json::json!({"kind":"global"})).map_err(|_| internal_error())?;
+    state.host.bind_window(&label, window_id, vec![scope])?;
+    let created = tauri::WebviewWindowBuilder::new(app, &label, tauri::WebviewUrl::App("index.html".into()))
+        .title("focaus · 内容窗口").inner_size(900., 700.).min_inner_size(600., 420.)
+        .on_navigation(|url| matches!(url.scheme(), "tauri" | "about") || url.host_str() == Some("tauri.localhost"))
+        .build();
+    if created.is_err() {
+        state.window_ids.lock().map_err(|_| internal_error())?.remove(&label);
+        state.view_contexts.lock().map_err(|_| internal_error())?.remove(&label);
+        state.host.unbind_window(&label)?;
+        return Err(internal_error());
+    }
+    Ok(true)
 }
 fn internal_error() -> SafeError {
     focaus_contracts::error(focaus_contracts::ErrorCode::InvalidResult, "Native application operation failed")
@@ -59,7 +162,20 @@ pub fn run() {
                 .unwrap_or(app.path().app_data_dir()?.join("library"));
             let host = NativeHost::open(root, crate::INITIAL_MIGRATION)
                 .map_err(|_| std::io::Error::other("Cannot open Focaus library"))?;
-            app.manage(RuntimeState { host: Arc::new(host), window_ids: Mutex::new(HashMap::new()) });
+            app.manage(RuntimeState { host: Arc::new(host), window_ids: Mutex::new(HashMap::new()), view_contexts: Mutex::new(HashMap::new()) });
+            {
+                let state = app.state::<RuntimeState>();
+                let main = state.host.views.persistent_window_id("main", None).map_err(|_| std::io::Error::other("Cannot restore window identity"))?;
+                state.window_ids.lock().map_err(|_| std::io::Error::other("Window registry unavailable"))?.insert("main".into(), main.clone());
+                let plans = state.host.views.restore_plan().map_err(|_| std::io::Error::other("Cannot restore content windows"))?;
+                for plan in plans.into_iter().filter(|p| p.window_id != main) {
+                    if let Some(view_id) = plan.view_ids.first() {
+                        let context = ViewContext { view_id: view_id.clone(), transfer_id: None, base_view_revision: None };
+                        ensure_view_window(app.handle(), &state, &plan.window_id, context, plan.placement == "standalone")
+                            .map_err(|_| std::io::Error::other("Cannot restore content window"))?;
+                    }
+                }
+            }
             use tauri::menu::{Menu, MenuItem, Submenu, PredefinedMenuItem};
             let show = MenuItem::with_id(app, "show", "打开 focaus", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出 focaus 并保存录音", true, Some("CmdOrCtrl+Q"))?;
@@ -102,6 +218,16 @@ pub fn run() {
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close(); let _ = window.hide();
+            }
+            if let tauri::WindowEvent::Destroyed = event {
+                let state = window.state::<RuntimeState>();
+                if let Ok(mut contexts) = state.view_contexts.lock() {
+                    if let Some(context) = contexts.remove(window.label()) {
+                        if let Some(transfer) = context.transfer_id { let _ = state.host.store.write(|t| crate::windows::rollback(t, &transfer)); }
+                    }
+                }
+                let _ = state.host.unbind_window(window.label());
+                if let Ok(mut ids) = state.window_ids.lock() { ids.remove(window.label()); };
             }
         })
         .build(tauri::generate_context!())
