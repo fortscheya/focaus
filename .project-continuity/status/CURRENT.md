@@ -2,7 +2,7 @@
 
 ## Active Development
 - 2026-10-18 D167–D171：后续开发获授权；G0初始3312e4e、G1共同d9a8cdf6已提交。四个独立Codex App会话和worktree已建立，均请求gpt-6.1-sol/max且工具接受，运行配置字段未独立读回。详见docs/DEVELOPMENT.md。
-- 当前codex/focaus-integration HEAD=6cfb206，已整合F的真实录音事件/CAS、Unicode/数学、coverage包装、ContentView和content.get投影，N的资料原件托管/原子搜索投影及R0原声登记隔离，A runtime以及E sidecar；未执行push/rebase/发布。
+- 当前codex/focaus-integration HEAD=abcfda7，已整合F的真实录音事件/CAS、Unicode/数学、coverage包装、ContentView和content.get投影，N的资料原件托管/原子搜索投影及R0原声登记隔离，A runtime以及E sidecar；未执行push/rebase/发布。
 - D170授权本地merge/cherry-pick和契约同步，不含rebase/push/发布/删除分支或worktree；四路任务与报告消息已获授权。
 - N首批实现SQLite单写/事务outbox/CAS/幂等、CPAL独立采集线程、分段封口恢复、任务/凭据绑定/数学；第二轮真实设备采集和恢复已通过关键本地门。搜索/窗口协调与投影已实现，材料接收已进入宿主纵向链。
 - F实现HeroUI工作区/编辑/搜索/组件/focaus样例和adapter；native隔离、bootstrap、录音事件分流、ContentView列表及content.get投影已整合；投影保留partial/unsupported并按revision丢弃旧响应。构建通过不替代真实内容验收。
@@ -21,6 +21,7 @@
 - D173第二轮默认麦克风采集：ACK持续前进，UI水位增长，停止后state=stopped；SQLite水位46730ms、47个WAV、数据库完整性通过。第一轮coverage误解析缺陷已通过第二轮交互复验关闭；没有云/上传/转写。
 - 整合后验证：cargo workspace 42项相关测试、native harness19项、资料10项、TS契约37项、桌面Vitest7项及构建均通过；warning仅为未使用的内部require_receipt方法。
 - 最新整合后验证：cargo workspace 42项、native harness28项、资料引擎10项、TS契约37项、桌面Vitest9项、typecheck/build均通过；N R0 的真实生产 write_loop/SQLite持锁/journal恢复测试包含在28项内。
+- 最终签名App复验：同一库的真实课程窗显示3个宿主ContentView和CONTENT.GET PROJECTION；因无已提交正文，面板显示`empty`，未填充fixture。最终App启动、恢复、签名和workspace_hygiene均通过。
 
 ## Pending / Unverified
 - G2仍未完成关窗继续录音、长录音恢复、真实资料导入UI、有资料后的真实Command+F命中以及编辑/引用/对象的端到端验收；content.get投影代码已接线，但不能由模块测试或空索引关闭完整内容验收。
