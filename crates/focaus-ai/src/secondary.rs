@@ -19,6 +19,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 
+pub const SECONDARY_RESULT_SEMANTICS: &str = "secondary_segment_v1";
+
 const FILLERS: &[&str] = &["嗯", "呃", "啊", "这个", "那个", "you know", "um", "uh"];
 const THIRD_PERSON_MARKERS: &[&str] = &["老师说", "老师认为", "他说", "她说", "他说道", "the teacher says", "he says", "she says"];
 const NEGATION_MARKERS: &[&str] = &["不", "无", "非", "未", "没有", "不能", "不会", "not", "never", "without"];
@@ -681,6 +683,32 @@ pub async fn submit_secondary_result<H: HostServices>(
     segment: &SecondarySegment,
     raw_units: &[RawTextUnit],
 ) -> Result<CommandResult, SafeError> {
+    host.result_submit(build_secondary_result_submission(task_id, attempt, snapshot, segment, raw_units)?).await
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SecondaryResultCandidateEnvelope {
+    pub result_semantics: String,
+    pub submission_key: String,
+    pub task_id: String,
+    pub attempt: u64,
+    pub snapshot_id: String,
+    pub target_revision: String,
+    pub source_refs: Vec<SourceRef>,
+    pub candidate: SecondarySegment,
+}
+
+pub fn build_secondary_result_submission(
+    task_id: impl Into<String>,
+    attempt: u64,
+    snapshot: &InputSnapshot,
+    segment: &SecondarySegment,
+    raw_units: &[RawTextUnit],
+) -> Result<ResultSubmitInput, SafeError> {
+    let task_id = task_id.into();
+    if task_id.is_empty() || attempt == 0 {
+        return Err(invalid_argument("secondary_result_identity_required"));
+    }
     validate_secondary_snapshot(snapshot)?;
     let Some(expected_revision) = snapshot.target_base_revision.as_deref() else {
         return Err(invalid_argument("secondary_target_revision_required"));
@@ -692,17 +720,63 @@ pub async fn submit_secondary_result<H: HostServices>(
         return Err(stale("secondary_result_recording_stale"));
     }
     validate_secondary_segment(segment, raw_units)?;
-    let candidate = serde_json::to_value(segment)
+    let envelope = SecondaryResultCandidateEnvelope {
+        result_semantics: SECONDARY_RESULT_SEMANTICS.into(),
+        submission_key: format!("secondary:{}:{}:{}:{}", task_id, attempt, snapshot.snapshot_id, segment.revision_id),
+        task_id: task_id.clone(),
+        attempt,
+        snapshot_id: snapshot.snapshot_id.clone(),
+        target_revision: segment.revision_id.clone(),
+        source_refs: segment.raw_refs.clone(),
+        candidate: segment.clone(),
+    };
+    let candidate = serde_json::to_value(&envelope)
         .map_err(|_| invalid("secondary_result_serialization_failed"))?;
-    host.result_submit(ResultSubmitInput {
-        task_id: task_id.into(),
+    let submission = ResultSubmitInput {
+        task_id,
         attempt,
         snapshot_id: snapshot.snapshot_id.clone(),
         candidate,
-        source_refs: segment.raw_refs.clone(),
+        source_refs: envelope.source_refs,
         resources: vec![],
-    })
-    .await
+    };
+    validate_secondary_result_submission(&submission)?;
+    Ok(submission)
+}
+
+pub fn decode_secondary_result_candidate(value: &Value) -> Result<SecondaryResultCandidateEnvelope, SafeError> {
+    let envelope: SecondaryResultCandidateEnvelope = serde_json::from_value(value.clone())
+        .map_err(|_| invalid("secondary_result_candidate_envelope_invalid"))?;
+    if envelope.result_semantics != SECONDARY_RESULT_SEMANTICS {
+        return Err(invalid("unknown_secondary_result_semantics"));
+    }
+    let expected_submission_key = format!("secondary:{}:{}:{}:{}", envelope.task_id, envelope.attempt, envelope.snapshot_id, envelope.target_revision);
+    if envelope.submission_key != expected_submission_key
+        || envelope.task_id.is_empty()
+        || envelope.snapshot_id.is_empty()
+        || envelope.attempt == 0
+        || envelope.target_revision.is_empty()
+        || envelope.source_refs.is_empty()
+        || envelope.candidate.revision_id != envelope.target_revision
+        || envelope.candidate.raw_refs != envelope.source_refs
+    {
+        return Err(stale("secondary_result_candidate_identity_mismatch"));
+    }
+    Ok(envelope)
+}
+
+pub fn validate_secondary_result_submission(
+    submission: &ResultSubmitInput,
+) -> Result<SecondaryResultCandidateEnvelope, SafeError> {
+    let envelope = decode_secondary_result_candidate(&submission.candidate)?;
+    if submission.task_id != envelope.task_id
+        || submission.attempt != envelope.attempt
+        || submission.snapshot_id != envelope.snapshot_id
+        || submission.source_refs != envelope.source_refs
+    {
+        return Err(stale("secondary_result_submission_outer_identity_mismatch"));
+    }
+    Ok(envelope)
 }
 
 pub fn validate_secondary_segment(
@@ -1033,6 +1107,30 @@ mod tests {
         let mut changed = first.clone();
         changed.source_ref.revision_id = "raw-rev-2".into();
         assert_eq!(validate_secondary_draft(&draft, &[changed]).unwrap_err().code, focaus_contracts::ErrorCode::StaleInput);
+    }
+
+    #[test]
+    fn secondary_result_envelope_is_discriminated_and_revision_bound() {
+        let (segment, raw, _) = correction_fixture();
+        let mut snapshot = secondary_snapshot(ModelId::Qwen38Flash);
+        snapshot.target_base_revision = Some(segment.revision_id.clone());
+        let submission = build_secondary_result_submission("secondary-task", 2, &snapshot, &segment, &[raw]).unwrap();
+        assert_eq!(submission.candidate["result_semantics"], SECONDARY_RESULT_SEMANTICS);
+        assert_eq!(submission.candidate["target_revision"].as_str(), Some(segment.revision_id.as_str()));
+        assert_eq!(validate_secondary_result_submission(&submission).unwrap().candidate, segment);
+        let mut outer_mismatch = submission.clone();
+        outer_mismatch.snapshot_id = "other-snapshot".into();
+        assert_eq!(validate_secondary_result_submission(&outer_mismatch).unwrap_err().code, focaus_contracts::ErrorCode::StaleInput);
+
+        let mut wrong_semantics = submission.candidate.clone();
+        wrong_semantics["result_semantics"] = json!("focaus_context_v2");
+        assert_eq!(decode_secondary_result_candidate(&wrong_semantics).unwrap_err().code, focaus_contracts::ErrorCode::InvalidResult);
+        let mut wrong_key = submission.candidate.clone();
+        wrong_key["submission_key"] = json!("secondary:other:1:other:other");
+        assert_eq!(decode_secondary_result_candidate(&wrong_key).unwrap_err().code, focaus_contracts::ErrorCode::StaleInput);
+        let mut wrong_revision = submission.candidate.clone();
+        wrong_revision["target_revision"] = json!("secondary-rev-2");
+        assert_eq!(decode_secondary_result_candidate(&wrong_revision).unwrap_err().code, focaus_contracts::ErrorCode::StaleInput);
     }
 
     #[test]

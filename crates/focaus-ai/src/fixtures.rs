@@ -94,11 +94,87 @@ pub fn qwen38_chat_completion() -> Value {
     })
 }
 
+pub fn asr_result_candidate_provisional() -> Value {
+    json!({
+        "result_semantics": "asr_raw_candidate_v1",
+        "submission_key": "asr:fixture-stream-task:1:fixture-stream-snapshot",
+        "task_id": "fixture-stream-task",
+        "attempt": 1,
+        "snapshot_id": "fixture-stream-snapshot",
+        "source_refs": [{
+            "entity_id": "fixture-audio-span",
+            "revision_id": "fixture-audio-revision",
+            "content_hash": "fixture-hash",
+            "selector": { "kind": "whole" }
+        }],
+        "candidate": {
+            "task_id": "fixture-stream-task",
+            "attempt": 1,
+            "snapshot_id": "fixture-stream-snapshot",
+            "remote_binding": {
+                "provider": "bailian",
+                "provider_task_id": "fixture-stream-task",
+                "connection_epoch": 1,
+                "provider_sentence_id": "1",
+                "local_request_segment_id": "fixture-stream-task"
+            },
+            "state": "provisional",
+            "text": "hello",
+            "relative_start_ms": 0,
+            "relative_end_ms": 100,
+            "speaker_ref": null,
+            "mapping_revision_id": "fixture-mapping-revision"
+        }
+    })
+}
+
+pub fn asr_result_candidate_final() -> Value {
+    let mut value = asr_result_candidate_provisional();
+    value["candidate"]["state"] = json!("final");
+    value["candidate"]["text"] = json!("hello world");
+    value["candidate"]["relative_end_ms"] = json!(120);
+    value
+}
+
+pub fn secondary_result_candidate() -> Value {
+    json!({
+        "result_semantics": "secondary_segment_v1",
+        "submission_key": "secondary:fixture-secondary-task:1:fixture-secondary-snapshot:fixture-secondary-revision",
+        "task_id": "fixture-secondary-task",
+        "attempt": 1,
+        "snapshot_id": "fixture-secondary-snapshot",
+        "target_revision": "fixture-secondary-revision",
+        "source_refs": [{
+            "entity_id": "fixture-utterance",
+            "revision_id": "fixture-raw-revision",
+            "content_hash": "fixture-hash",
+            "selector": { "kind": "whole" }
+        }],
+        "candidate": {
+            "secondary_id": "fixture-secondary",
+            "recording_id": "fixture-recording",
+            "raw_refs": [{
+                "entity_id": "fixture-utterance",
+                "revision_id": "fixture-raw-revision",
+                "content_hash": "fixture-hash",
+                "selector": { "kind": "whole" }
+            }],
+            "ordered_spans": ["fixture-span"],
+            "text": "hello world",
+            "suggestions": [],
+            "generation_revision": "fixture-generation-revision",
+            "revision_id": "fixture-secondary-revision"
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::asr::{decode_stream_event, filetrans_cancel_allowed, parse_filetrans_status, DecodedStreamEvent, FileTransStatus};
+    use crate::asr::{decode_asr_result_candidate, decode_stream_event, filetrans_cancel_allowed, parse_filetrans_status, DecodedStreamEvent, FileTransStatus};
     use crate::progress::parse_system_one_choice;
+    use crate::secondary::decode_secondary_result_candidate;
+    use focaus_contracts::AsrRawCandidateState;
 
     #[test]
     fn public_shaped_fixtures_replay_without_network() {
@@ -117,5 +193,11 @@ mod tests {
         assert!(!filetrans_cancel_allowed(&status));
         assert_eq!(parse_system_one_choice(&progress_response(), "current_position").unwrap(), "page-1");
         assert_eq!(qwen38_chat_completion()["model"], "qwen3.8-flash");
+        let provisional = decode_asr_result_candidate(&asr_result_candidate_provisional()).unwrap();
+        let final_result = decode_asr_result_candidate(&asr_result_candidate_final()).unwrap();
+        assert_eq!(provisional.candidate.state, AsrRawCandidateState::Provisional);
+        assert_eq!(final_result.candidate.state, AsrRawCandidateState::Final);
+        assert_eq!(final_result.candidate.text, "hello world");
+        assert_eq!(decode_secondary_result_candidate(&secondary_result_candidate()).unwrap().candidate.secondary_id, "fixture-secondary");
     }
 }

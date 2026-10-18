@@ -11,11 +11,13 @@ use focaus_contracts::{
     ErrorCode, HostServices, InputSnapshot, ModelId, RemoteBinding, ResultSubmitInput, SafeError,
     SourceRef, Task, TaskCheckpointInput, TimeMapping, TimelineRange,
 };
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 
 pub const STREAMING_MODEL_ID: &str = models::STREAMING_ASR;
 pub const FILETRANS_MODEL_ID: &str = models::FILETRANS_ASR;
+pub const ASR_RESULT_SEMANTICS: &str = "asr_raw_candidate_v1";
 
 /// Provider-neutral event decoded by the host transport.  The wire decoder is
 /// intentionally strict about the fields needed for local identity and time.
@@ -602,21 +604,98 @@ pub async fn submit_candidate<H: HostServices>(
     host.result_submit(build_asr_result_submission(candidate, source_refs)?).await
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AsrResultCandidateEnvelope {
+    pub result_semantics: String,
+    pub submission_key: String,
+    pub task_id: String,
+    pub attempt: u64,
+    pub snapshot_id: String,
+    pub source_refs: Vec<SourceRef>,
+    pub candidate: AsrRawCandidate,
+}
+
 pub fn build_asr_result_submission(
     candidate: &AsrRawCandidate,
     source_refs: Vec<SourceRef>,
 ) -> Result<ResultSubmitInput, SafeError> {
-    if candidate.task_id.is_empty() || candidate.snapshot_id.is_empty() {
+    if candidate.task_id.is_empty() || candidate.snapshot_id.is_empty() || candidate.attempt == 0 {
         return Err(invalid_argument("asr_result_identity_required"));
     }
-    Ok(ResultSubmitInput {
+    if source_refs.is_empty() {
+        return Err(invalid_argument("asr_result_source_refs_required"));
+    }
+    let envelope = AsrResultCandidateEnvelope {
+        result_semantics: ASR_RESULT_SEMANTICS.into(),
+        submission_key: format!("asr:{}:{}:{}", candidate.task_id, candidate.attempt, candidate.snapshot_id),
         task_id: candidate.task_id.clone(),
         attempt: candidate.attempt,
         snapshot_id: candidate.snapshot_id.clone(),
-        candidate: serde_json::to_value(candidate).map_err(|_| invalid("asr_candidate_serialization_failed"))?,
         source_refs,
+        candidate: candidate.clone(),
+    };
+    let candidate_value = serde_json::to_value(&envelope)
+        .map_err(|_| invalid("asr_candidate_serialization_failed"))?;
+    let submission = ResultSubmitInput {
+        task_id: candidate.task_id.clone(),
+        attempt: candidate.attempt,
+        snapshot_id: candidate.snapshot_id.clone(),
+        candidate: candidate_value,
+        source_refs: envelope.source_refs,
         resources: vec![],
-    })
+    };
+    validate_asr_result_submission(&submission)?;
+    Ok(submission)
+}
+
+pub fn build_asr_result_submission_for_open(
+    open: &AsrStreamOpen,
+    candidate: &AsrRawCandidate,
+    source_refs: Vec<SourceRef>,
+) -> Result<ResultSubmitInput, SafeError> {
+    validate_stream_open(open)?;
+    if candidate.task_id != open.task_id
+        || candidate.snapshot_id != open.snapshot.snapshot_id
+        || candidate.mapping_revision_id != open.mapping.mapping_revision_id
+    {
+        return Err(stale("asr_result_open_identity_mismatch"));
+    }
+    build_asr_result_submission(candidate, source_refs)
+}
+
+pub fn decode_asr_result_candidate(value: &Value) -> Result<AsrResultCandidateEnvelope, SafeError> {
+    let envelope: AsrResultCandidateEnvelope = serde_json::from_value(value.clone())
+        .map_err(|_| invalid("asr_result_candidate_envelope_invalid"))?;
+    if envelope.result_semantics != ASR_RESULT_SEMANTICS {
+        return Err(invalid("unknown_asr_result_semantics"));
+    }
+    let expected_submission_key = format!("asr:{}:{}:{}", envelope.task_id, envelope.attempt, envelope.snapshot_id);
+    if envelope.submission_key != expected_submission_key
+        || envelope.task_id.is_empty()
+        || envelope.snapshot_id.is_empty()
+        || envelope.attempt == 0
+        || envelope.source_refs.is_empty()
+        || envelope.candidate.task_id != envelope.task_id
+        || envelope.candidate.snapshot_id != envelope.snapshot_id
+        || envelope.candidate.attempt != envelope.attempt
+    {
+        return Err(stale("asr_result_candidate_identity_mismatch"));
+    }
+    Ok(envelope)
+}
+
+pub fn validate_asr_result_submission(
+    submission: &ResultSubmitInput,
+) -> Result<AsrResultCandidateEnvelope, SafeError> {
+    let envelope = decode_asr_result_candidate(&submission.candidate)?;
+    if submission.task_id != envelope.task_id
+        || submission.attempt != envelope.attempt
+        || submission.snapshot_id != envelope.snapshot_id
+        || submission.source_refs != envelope.source_refs
+    {
+        return Err(stale("asr_result_submission_outer_identity_mismatch"));
+    }
+    Ok(envelope)
 }
 
 /// Exact provider-shaped stream events are decoded before entering the local
@@ -863,7 +942,7 @@ mod tests {
     use super::*;
     use focaus_contracts::{
         AsrRawCandidateState, AudioSpanAsrCoverage, AudioSpanCoverageStatus, FrameRange,
-        InputSnapshot, TaskKind, TimelineRange,
+        InputSnapshot, Selector, SourceRef, TaskKind, TimelineRange, WholeSelector,
     };
 
     fn mapping() -> TimeMapping {
@@ -963,6 +1042,22 @@ mod tests {
         assert_eq!(gate.classify(&candidate), PublishDecision::Duplicate);
         gate.cancel();
         assert_eq!(gate.classify(&candidate), PublishDecision::DropCancelled);
+        let source = SourceRef { entity_id: "raw".into(), revision_id: "raw-rev".into(), content_hash: "hash".into(), selector: Selector::V4(WholeSelector { kind: "whole".into() }) };
+        let submission = build_asr_result_submission_for_open(&open(), &candidate, vec![source.clone()]).unwrap();
+        assert_eq!(submission.candidate["result_semantics"], ASR_RESULT_SEMANTICS);
+        assert_eq!(validate_asr_result_submission(&submission).unwrap().candidate, candidate);
+        let mut outer_mismatch = submission.clone();
+        outer_mismatch.attempt = 2;
+        assert_eq!(validate_asr_result_submission(&outer_mismatch).unwrap_err().code, ErrorCode::StaleInput);
+        let mut wrong_semantics = submission.candidate.clone();
+        wrong_semantics["result_semantics"] = serde_json::json!("focaus_context_v2");
+        assert_eq!(decode_asr_result_candidate(&wrong_semantics).unwrap_err().code, ErrorCode::InvalidResult);
+        let mut wrong_key = submission.candidate.clone();
+        wrong_key["submission_key"] = serde_json::json!("asr:other:1:other");
+        assert_eq!(decode_asr_result_candidate(&wrong_key).unwrap_err().code, ErrorCode::StaleInput);
+        let mut wrong_open = open();
+        wrong_open.binding = crate::binding_for_model(ModelId::Qwen38Flash);
+        assert_eq!(build_asr_result_submission_for_open(&wrong_open, &candidate, vec![source]).unwrap_err().code, ErrorCode::InvalidArgument);
     }
 
     #[test]
