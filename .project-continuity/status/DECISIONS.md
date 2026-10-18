@@ -175,3 +175,7 @@
 - D168（2026-10-18，用户跟进）：允许创建Git；包括总控在内的五个开发会话遇到问题可随时向用户提问。初始化及已请求的本地分支/worktree开发可以推进，本地merge/cherry-pick整合与契约同步已提出一次性确认，尚未收到答复；不自动push、发布、rebase或删除分支/worktree。
 
 - D169（2026-10-18，总控可逆工程决定）：G1以schemas/source.py为唯一公共契约源，生成JSON Schema/TypeScript/Rust；content hash采用RFC8785，数据库首迁移schema1，搜索profile固定Unicode15.0.0。旧1.x资料经显式Python适配保原包/ID/源版本、新parse revision和未处理覆盖；旧catchup为legacy_summary。根基础React19/HeroUI3/Tailwind4仅C锁依赖，具体可视化库仍待U12。契约验证通过不代表产品实测。
+
+- D170（2026-10-18，用户一次性本地整合授权）：用户回复“允许本项目上述本地整合与契约同步”，授权总控在复核目录范围、精确diff、测试证据后本地cherry-pick/merge四路成果并向四路同步公共契约。仅本项目；不包含rebase、push、发布、删除分支/worktree。无需逐commit重复询问。
+
+- D171（2026-10-18，用户资料路径）：用户提供/Users/pitr/Desktop/SKD/DeepLearning用于真实课程验收。已找到L08/L09原始PDF，仅本地只读提取/预览获当前任务授权；原件/派生内容不纳管、不上传，旧笔记不作转写真值，qta与课堂对应仍未知。

@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "assets": [
+    {
+      "asset_id": "l08_courseware",
+      "sha256": "379190c4c5174887805dca799a577a80c153661a4608be28e584baf3efc88012",
+      "byte_length": 3056633,
+      "kind": "application/pdf",
+      "scope_label": "L08",
+      "audio_alignment": "unconfirmed",
+      "authorization": "local read-only extraction; no cloud upload",
+      "source_version": "user-provided 2026-10-18"
+    },
+    {
+      "asset_id": "l09_courseware",
+      "sha256": "daab8f4f01f33f0338b89f98485a0d5f9c698e44dba665beb36d6c5f42b5a294",
+      "byte_length": 2568188,
+      "kind": "application/pdf",
+      "scope_label": "L09",
+      "audio_alignment": "unconfirmed",
+      "authorization": "local read-only extraction; no cloud upload",
+      "source_version": "user-provided 2026-10-18"
+    }
+  ]
+}

@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "mode": "local_each_track_to_null",
+  "assets": [
+    {
+      "asset_id": "source_9fa9d2a238898515",
+      "source_sha256": "9fa9d2a23889851530d0d3d0fab425a65639dd603fbdffa4944c45beb41c1acf",
+      "tracks": [
+        {
+          "stream_index": 0,
+          "codec": "aac",
+          "status": "decoded_to_null",
+          "exit_code": 0,
+          "decoded_out_time_us": "1275371667",
+          "wall_seconds": 2.652,
+          "error_class": null,
+          "audio_saved": false
+        },
+        {
+          "stream_index": 1,
+          "codec": "apple_apac",
+          "status": "decode_failed",
+          "exit_code": 234,
+          "decoded_out_time_us": null,
+          "wall_seconds": 0.026,
+          "error_class": "decoder_unavailable",
+          "audio_saved": false
+        }
+      ],
+      "track_selected": null,
+      "audition": "not_tested",
+      "lesson_alignment": "unconfirmed"
+    },
+    {
+      "asset_id": "source_4b80efdacfd57e8c",
+      "source_sha256": "4b80efdacfd57e8c587bd1320387f975c6d56734411dbf287e127b6e6962c8ed",
+      "tracks": [
+        {
+          "stream_index": 0,
+          "codec": "aac",
+          "status": "decoded_to_null",
+          "exit_code": 0,
+          "decoded_out_time_us": "6140310000",
+          "wall_seconds": 4.012,
+          "error_class": null,
+          "audio_saved": false
+        },
+        {
+          "stream_index": 1,
+          "codec": "apple_apac",
+          "status": "decode_failed",
+          "exit_code": 234,
+          "decoded_out_time_us": null,
+          "wall_seconds": 0.043,
+          "error_class": "decoder_unavailable",
+          "audio_saved": false
+        }
+      ],
+      "track_selected": null,
+      "audition": "not_tested",
+      "lesson_alignment": "unconfirmed"
+    }
+  ]
+}

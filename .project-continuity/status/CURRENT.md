@@ -2,11 +2,11 @@
 
 ## Active Development (D167/D168)
 - 2026-10-18 G0已完成初始化与白名单提交3312e4e；list_projects读回Git=true，总控在codex/focaus-integration。
-- G1已实现单源C01–C09类型/Schema、迁移schema1、host traits/stub、旧包适配/能力拒写/降级、45脱敏正反例和12运行场景说明；实际验证通过，当前准备提交共同基线。
+- G1已实现单源C01–C09类型/Schema、迁移schema1、host traits/stub、旧包适配/能力拒写/降级、45脱敏正反例和12运行场景说明；实际验证通过，共同基线已提交d9a8cdf6。
 - generator一致性、11项Python/SQLite、5项Rust契约、37例TS/Ajv和RFC8785、前端占位生产构建均通过；产品V/U未执行。
 - Rust1.99.1位于忽略.local；Node用bundled runtime，pnpm11.25.0。根依赖/锁文件仅C维护，具体3D库未锁。
-- 四开发对话尚未创建；总控01a14cae-d8ce-7053-bd12-737ea1bef020 / local。工具声明支持gpt-6.1-sol/max；运行设置未读回。
-- 本地整合merge/cherry-pick问题待答；云调用/上传/费用未获得本阶段明确授权，不读取实际密钥。
+- 四开发对话已创建、真实worktree/分支核验并派发实施；总控01a14cae-d8ce-7053-bd12-737ea1bef020 / local。工具声明支持gpt-6.1-sol/max；运行设置未读回。
+- D170已授权本地整合merge/cherry-pick；云调用/上传/费用未获得本阶段明确授权，不读取实际密钥。
 - 下列文档交付观察为此前阶段记录；非Git/只写文档等阶段限制由D167/D168替代。执行登记docs/DEVELOPMENT.md。
 
 ## What Exists

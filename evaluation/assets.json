@@ -1,0 +1,143 @@
+{
+  "schema_version": 1,
+  "assets": [
+    {
+      "asset_id": "source_9fa9d2a238898515",
+      "sha256": "9fa9d2a23889851530d0d3d0fab425a65639dd603fbdffa4944c45beb41c1acf",
+      "byte_length": 95662597,
+      "metadata": {
+        "programs": [],
+        "stream_groups": [],
+        "streams": [
+          {
+            "index": 0,
+            "codec_name": "aac",
+            "codec_type": "audio",
+            "sample_rate": "48000",
+            "channels": 2,
+            "channel_layout": "stereo",
+            "time_base": "1/48000",
+            "start_pts": 0,
+            "start_time": "0.000000",
+            "duration_ts": 61217840,
+            "duration": "1275.371667"
+          },
+          {
+            "index": 1,
+            "codec_name": "apple_apac",
+            "codec_type": "audio",
+            "sample_rate": "48000",
+            "channels": 4,
+            "time_base": "1/48000",
+            "start_pts": 0,
+            "start_time": "0.000000",
+            "duration_ts": 61217840,
+            "duration": "1275.371667"
+          },
+          {
+            "index": 2,
+            "codec_type": "data",
+            "time_base": "1/10000",
+            "start_pts": 0,
+            "start_time": "0.000000",
+            "duration_ts": 12753717,
+            "duration": "1275.371700"
+          },
+          {
+            "index": 3,
+            "codec_type": "data",
+            "time_base": "1/48000",
+            "start_pts": 0,
+            "start_time": "0.000000",
+            "duration_ts": 61217840,
+            "duration": "1275.371667"
+          }
+        ],
+        "format": {
+          "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+          "duration": "1275.371700",
+          "size": "95662597"
+        }
+      },
+      "metadata_status": "read",
+      "original_preserved": true,
+      "managed_copy": null,
+      "authorization": "local read-only inspection; no cloud upload",
+      "decode_status": "not_tested",
+      "audition_status": "not_tested",
+      "corrupt_intervals": "unknown",
+      "selected_track": null,
+      "lesson_alignment": "unconfirmed",
+      "derivatives": []
+    },
+    {
+      "asset_id": "source_4b80efdacfd57e8c",
+      "sha256": "4b80efdacfd57e8c587bd1320387f975c6d56734411dbf287e127b6e6962c8ed",
+      "byte_length": 458220891,
+      "metadata": {
+        "programs": [],
+        "stream_groups": [],
+        "streams": [
+          {
+            "index": 0,
+            "codec_name": "aac",
+            "codec_type": "audio",
+            "sample_rate": "48000",
+            "channels": 2,
+            "channel_layout": "stereo",
+            "time_base": "1/48000",
+            "start_pts": 0,
+            "start_time": "0.000000",
+            "duration_ts": 294734880,
+            "duration": "6140.310000"
+          },
+          {
+            "index": 1,
+            "codec_name": "apple_apac",
+            "codec_type": "audio",
+            "sample_rate": "48000",
+            "channels": 4,
+            "time_base": "1/48000",
+            "start_pts": 0,
+            "start_time": "0.000000",
+            "duration_ts": 294734880,
+            "duration": "6140.310000"
+          },
+          {
+            "index": 2,
+            "codec_type": "data",
+            "time_base": "1/10000",
+            "start_pts": 0,
+            "start_time": "0.000000",
+            "duration_ts": 61403100,
+            "duration": "6140.310000"
+          },
+          {
+            "index": 3,
+            "codec_type": "data",
+            "time_base": "1/48000",
+            "start_pts": 0,
+            "start_time": "0.000000",
+            "duration_ts": 294734880,
+            "duration": "6140.310000"
+          }
+        ],
+        "format": {
+          "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+          "duration": "6140.310000",
+          "size": "458220891"
+        }
+      },
+      "metadata_status": "read",
+      "original_preserved": true,
+      "managed_copy": null,
+      "authorization": "local read-only inspection; no cloud upload",
+      "decode_status": "not_tested",
+      "audition_status": "not_tested",
+      "corrupt_intervals": "unknown",
+      "selected_track": null,
+      "lesson_alignment": "unconfirmed",
+      "derivatives": []
+    }
+  ]
+}

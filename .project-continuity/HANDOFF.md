@@ -6,8 +6,8 @@
 - 当前总控01a14cae-d8ce-7053-bd12-737ea1bef020 / local；项目f2e92149-ba53-44f1-87ed-848b34650309。
 
 ## State / Next
-- G0已提交3312e4e；当前codex/focaus-integration，G1单源契约/迁移/traits/fixtures已实现，Python11/Rust5/TS37例及占位构建通过，准备提交。
-- G1本地验证完成；四开发对话未创建；本地整合授权问题待答。实施登记docs/DEVELOPMENT.md。
+- G0已提交3312e4e；当前codex/focaus-integration，G1单源契约/迁移/traits/fixtures已提交d9a8cdf6，Python11/Rust5/TS37例及占位构建通过。
+- 四开发对话已从G1独立worktree启动，真实IDs/路径/分支见docs/DEVELOPMENT.md；D170已授权本地整合及契约同步。C继续Tauri接线与精确diff复核，不以模块测试替代产品验收。
 - G1要交C01–C09单源类型/Schema/迁移/公共traits/正反例，contract2.0.0、material2.0.0、visualization1.0.0；真实旧包适配和未知拒写/降级。
 - Rust1.99.1已在主目录.local隔离安装；Node用已发现bundled runtime，不改全局shell。
 - G2可靠本地链→G3获云授权后真实ASR/进度/focaus→G4三层/对象/编辑/引用/搜索→G5真实课程。
