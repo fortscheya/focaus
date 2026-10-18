@@ -332,9 +332,7 @@ pub fn build_generation_request(input: &CatchupGenerateInput) -> Result<Value, S
         return Err(invalid_argument("focaus_generation_model_mismatch"));
     }
     validate_retrieved_context(&input.snapshot, &input.context)?;
-    Ok(json!({
-        "model": models::MULTIMODAL,
-        "prompt_version": PROMPT_FOCAUS_V2,
+    let model_input = json!({
         "snapshot_id": input.snapshot.snapshot_id,
         "evidence_cutoff": input.snapshot.evidence_cutoff,
         "window": input.window,
@@ -352,7 +350,13 @@ pub fn build_generation_request(input: &CatchupGenerateInput) -> Result<Value, S
             "separate_body_cutoff_and_live_progress",
             "complete_only_within_15000ms"
         ]
-    }))
+    });
+    Ok(crate::transport::build_chat_completion_body(
+        models::MULTIMODAL,
+        PROMPT_FOCAUS_V2,
+        "Generate one concise focaus understanding path. Keep teacher_path separate from system explanation and return only the requested JSON object.",
+        model_input,
+    ))
 }
 
 pub async fn retrieve_context<H: HostServices>(
@@ -421,7 +425,7 @@ mod tests {
     fn generation_request_has_exact_model_and_no_credentials() {
         let body = build_generation_request(&input()).unwrap();
         assert_eq!(body["model"], models::MULTIMODAL);
-        assert_eq!(body["output_contract"], FOCAUS_RESULT_SEMANTICS);
+        assert!(body["messages"][1]["content"][0]["text"].as_str().unwrap().contains(FOCAUS_RESULT_SEMANTICS));
         assert!(body.to_string().find("credential").is_none());
     }
 }

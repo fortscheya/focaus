@@ -402,14 +402,17 @@ pub fn build_secondary_request(snapshot: &InputSnapshot, raw_text: &[RawTextUnit
     if raw_text.is_empty() {
         return Err(invalid_argument("secondary_raw_text_required"));
     }
-    Ok(json!({
-        "model": models::MULTIMODAL,
-        "prompt_version": PROMPT_SECONDARY_V1,
-        "snapshot_id": snapshot.snapshot_id,
-        "raw_units": raw_text,
-        "output_contract": "direct_speech_cleanup_with_review_suggestions",
-        "constraints": ["no_third_person_rewrite", "preserve_order", "critical_changes_are_suggestions"]
-    }))
+    Ok(crate::transport::build_chat_completion_body(
+        models::MULTIMODAL,
+        PROMPT_SECONDARY_V1,
+        "Clean direct speech without paraphrasing or third-person narration. Return only the requested JSON object.",
+        json!({
+            "snapshot_id": snapshot.snapshot_id,
+            "raw_units": raw_text,
+            "output_contract": "direct_speech_cleanup_with_review_suggestions",
+            "constraints": ["no_third_person_rewrite", "preserve_order", "critical_changes_are_suggestions"]
+        }),
+    ))
 }
 
 #[cfg(test)]

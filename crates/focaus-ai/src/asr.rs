@@ -52,7 +52,7 @@ pub fn validate_stream_open(open: &AsrStreamOpen) -> Result<(), SafeError> {
         return Err(invalid_argument("stream_snapshot_model_or_region_mismatch"));
     }
     binding_matches(&open.binding, ModelId::QwenAudio31AsrFlashStreaming)?;
-    if open.task_id.is_empty() || open.sample_rate == 0 || open.channels == 0 {
+    if open.task_id.is_empty() || open.sample_rate == 0 || open.channels != 1 {
         return Err(invalid_argument("invalid_stream_open"));
     }
     if open.mapping.segments.is_empty() {
@@ -375,16 +375,44 @@ pub fn build_filetrans_submit(request: &FileTransRequest) -> Result<Value, SafeE
     Ok(json!({
         "model": FILETRANS_MODEL_ID,
         "input": { "file_urls": [request.file_url] },
-        "parameters": {},
-        "metadata": {
-            "local_task_id": request.local_task_id,
-            "local_request_segment_id": request.local_request_segment_id,
-            "snapshot_id": request.snapshot.snapshot_id,
-            "attempt": request.attempt,
-            "mapping_revision_id": request.audio_span.mapping_revision_id,
-        },
-        "headers": { "X-DashScope-Async": "enable" }
+        "parameters": {}
     }))
+}
+
+pub fn filetrans_required_headers() -> BTreeMap<String, String> {
+    BTreeMap::from([
+        ("Content-Type".to_string(), "application/json".to_string()),
+        ("X-DashScope-Async".to_string(), "enable".to_string()),
+    ])
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FileTransStatus {
+    Pending,
+    Running,
+    Succeeded,
+    Failed,
+    Cancelled,
+    Unknown(String),
+}
+
+pub fn parse_filetrans_status(value: &Value) -> Result<(String, FileTransStatus), SafeError> {
+    let output = value.get("output").ok_or_else(|| invalid("filetrans_output_missing"))?;
+    let task_id = output.get("task_id").and_then(Value::as_str).filter(|id| !id.is_empty()).ok_or_else(|| invalid("filetrans_task_id_missing"))?.to_string();
+    let status = output.get("task_status").and_then(Value::as_str).ok_or_else(|| invalid("filetrans_task_status_missing"))?;
+    let status = match status {
+        "PENDING" => FileTransStatus::Pending,
+        "RUNNING" => FileTransStatus::Running,
+        "SUCCEEDED" => FileTransStatus::Succeeded,
+        "FAILED" => FileTransStatus::Failed,
+        "CANCELLED" | "CANCELED" => FileTransStatus::Cancelled,
+        other => FileTransStatus::Unknown(other.to_string()),
+    };
+    Ok((task_id, status))
+}
+
+pub fn filetrans_cancel_allowed(status: &FileTransStatus) -> bool {
+    matches!(status, FileTransStatus::Pending)
 }
 
 pub fn build_stream_run_task(open: &AsrStreamOpen, provider_task_id: &str) -> Result<Value, SafeError> {
@@ -392,21 +420,31 @@ pub fn build_stream_run_task(open: &AsrStreamOpen, provider_task_id: &str) -> Re
     if provider_task_id.is_empty() {
         return Err(invalid_argument("provider_task_id_required"));
     }
+    let context = open.context.iter().map(|text| json!({
+        "role": "user",
+        "content": [{ "type": "input_text", "text": text }]
+    })).collect::<Vec<_>>();
+    let vocabulary = open.hotwords.iter().map(|word| (word.clone(), json!(5))).collect::<serde_json::Map<_, _>>();
+    let mut input = json!({});
+    if !context.is_empty() {
+        input["context"] = Value::Array(context);
+    }
+    let mut parameters = json!({
+        "format": open.format,
+        "sample_rate": open.sample_rate
+    });
+    if !vocabulary.is_empty() {
+        parameters["vocabulary"] = Value::Object(vocabulary);
+    }
     Ok(json!({
         "header": { "action": "run-task", "task_id": provider_task_id, "streaming": "duplex" },
         "payload": {
-            "model": STREAMING_MODEL_ID,
             "task_group": "audio",
             "task": "asr",
             "function": "recognition",
-            "input": {},
-            "parameters": {
-                "format": open.format,
-                "sample_rate": open.sample_rate,
-                "channels": open.channels,
-                "hotwords": open.hotwords,
-                "context": open.context,
-            }
+            "model": STREAMING_MODEL_ID,
+            "parameters": parameters,
+            "input": input
         }
     }))
 }
@@ -417,7 +455,7 @@ pub fn build_stream_finish_task(provider_task_id: &str) -> Result<Value, SafeErr
     }
     Ok(json!({
         "header": { "action": "finish-task", "task_id": provider_task_id, "streaming": "duplex" },
-        "payload": {}
+        "payload": { "input": {} }
     }))
 }
 
@@ -480,38 +518,73 @@ pub async fn submit_candidate<H: HostServices>(
     }).await
 }
 
-/// A small strict decoder for provider sentence payloads.  It accepts the
-/// stable fields from both a direct event and the nested `output.sentence`
-/// shape, while rejecting missing identity/time fields.
-pub fn decode_remote_sentence(value: &Value) -> Result<RemoteSentence, SafeError> {
-    let root = value.get("output").unwrap_or(value);
-    let sentence = root.get("sentence").unwrap_or(root);
-    let provider_task_id = string_field(root, "task_id").or_else(|| string_field(value, "task_id"));
-    let sentence_id = string_field(sentence, "sentence_id").or_else(|| string_field(sentence, "id"));
+/// Exact provider-shaped stream events are decoded before entering the local
+/// session state machine. The empty `sentence_begin` result and heartbeat are
+/// intentionally not candidates.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DecodedStreamEvent {
+    Sentence(RemoteSentence),
+    Heartbeat,
+    SentenceStart,
+}
+
+pub fn decode_stream_event(value: &Value) -> Result<DecodedStreamEvent, SafeError> {
+    let header = value.get("header").unwrap_or(value);
+    let payload = value.get("payload").unwrap_or(value);
+    if string_field(header, "event").as_deref() == Some("task-failed") {
+        return Err(task_error(ErrorCode::ProviderError, "provider_stream_task_failed", false));
+    }
+    let output = payload.get("output").unwrap_or(payload);
+    let sentence = output.get("sentence").unwrap_or(output);
+    if sentence.get("heartbeat").and_then(Value::as_bool).unwrap_or(false) {
+        return Ok(DecodedStreamEvent::Heartbeat);
+    }
+    let provider_task_id = string_field(header, "task_id").or_else(|| string_field(payload, "task_id")).or_else(|| string_field(value, "task_id"));
+    let sentence_id = id_field(sentence, "sentence_id").or_else(|| id_field(sentence, "id"));
     let text = string_field(sentence, "text");
     let begin = u64_field(sentence, "begin_time").or_else(|| u64_field(sentence, "begin_time_ms"));
     let end = u64_field(sentence, "end_time").or_else(|| u64_field(sentence, "end_time_ms"));
-    let epoch = u64_field(root, "connection_epoch").or_else(|| u64_field(value, "connection_epoch"));
-    let state_value = string_field(sentence, "status").or_else(|| string_field(sentence, "state"));
-    let state = match state_value.as_deref() {
-        Some("final") | Some("completed") => AsrRawCandidateState::Final,
-        Some("provisional") | Some("partial") | Some("running") => AsrRawCandidateState::Provisional,
-        _ => return Err(invalid("provider_sentence_state_missing")),
-    };
-    let (provider_task_id, sentence_id, text, begin, end, epoch) = match (provider_task_id, sentence_id, text, begin, end, epoch) {
-        (Some(a), Some(b), Some(c), Some(d), Some(e), Some(f)) => (a, b, c, d, e, f),
+    let finality = sentence.get("sentence_end").and_then(Value::as_bool).map(|is_end| if is_end { AsrRawCandidateState::Final } else { AsrRawCandidateState::Provisional }).or_else(|| {
+        let state = string_field(sentence, "status").or_else(|| string_field(sentence, "state"));
+        match state.as_deref() {
+            Some("final") | Some("completed") => Some(AsrRawCandidateState::Final),
+            Some("provisional") | Some("partial") | Some("running") => Some(AsrRawCandidateState::Provisional),
+            _ => None,
+        }
+    }).ok_or_else(|| invalid("provider_sentence_state_missing"))?;
+    if finality == AsrRawCandidateState::Provisional && (end.is_none() || text.as_deref().unwrap_or_default().is_empty()) {
+        return Ok(DecodedStreamEvent::SentenceStart);
+    }
+    let (provider_task_id, sentence_id, text, begin, end) = match (provider_task_id, sentence_id, text, begin, end) {
+        (Some(a), Some(b), Some(c), Some(d), Some(e)) => (a, b, c, d, e),
         _ => return Err(invalid("provider_sentence_required_fields_missing")),
     };
-    Ok(RemoteSentence {
+    if end <= begin {
+        return Err(invalid("provider_sentence_time_invalid"));
+    }
+    Ok(DecodedStreamEvent::Sentence(RemoteSentence {
         provider_task_id,
-        connection_epoch: epoch,
+        connection_epoch: u64_field(payload, "connection_epoch").or_else(|| u64_field(value, "connection_epoch")).unwrap_or(0),
         sentence_id,
-        finality: state,
+        finality,
         text,
         begin_time_ms: begin,
         end_time_ms: end,
         speaker_ref: string_field(sentence, "speaker_id").or_else(|| string_field(sentence, "speaker_ref")),
-    })
+    }))
+}
+
+pub fn decode_remote_sentence(value: &Value) -> Result<RemoteSentence, SafeError> {
+    match decode_stream_event(value)? {
+        DecodedStreamEvent::Sentence(sentence) => Ok(sentence),
+        DecodedStreamEvent::Heartbeat | DecodedStreamEvent::SentenceStart => Err(invalid("provider_event_is_not_complete_sentence")),
+    }
+}
+
+pub fn decode_remote_sentence_for_epoch(value: &Value, connection_epoch: u64) -> Result<RemoteSentence, SafeError> {
+    let mut sentence = decode_remote_sentence(value)?;
+    sentence.connection_epoch = connection_epoch;
+    Ok(sentence)
 }
 
 fn string_field(value: &Value, key: &str) -> Option<String> {
@@ -520,6 +593,10 @@ fn string_field(value: &Value, key: &str) -> Option<String> {
 
 fn u64_field(value: &Value, key: &str) -> Option<u64> {
     value.get(key).and_then(Value::as_u64)
+}
+
+fn id_field(value: &Value, key: &str) -> Option<String> {
+    value.get(key).and_then(|field| field.as_str().map(str::to_owned).or_else(|| field.as_u64().map(|id| id.to_string())))
 }
 
 /// A provider task map never treats a remote ID as the local task ID.
@@ -767,6 +844,10 @@ mod tests {
         assert_eq!(map_relative_interval_with_sample_rate(&scaled, 0, 1000, 100).unwrap(), TimelineRange { start_ms: 0, end_ms: 1000 });
         let body = build_stream_run_task(&open(), "remote").unwrap();
         assert_eq!(body["payload"]["model"], STREAMING_MODEL_ID);
+        assert_eq!(body["payload"]["parameters"]["sample_rate"], 16_000);
+        assert!(body["payload"]["parameters"].get("channels").is_none());
+        assert_eq!(build_stream_finish_task("remote").unwrap()["payload"]["input"], serde_json::json!({}));
+        assert_eq!(filetrans_required_headers()["X-DashScope-Async"], "enable");
         assert!(body.to_string().find("credential").is_none());
         assert!(validate_audio_chunk(&AudioChunk { chunk_seq: 0, audio_span: AudioSpan { audio_span_id: "span".into(), recording_id: "rec".into(), asset_id: Some("asset".into()), track_id: Some("track".into()), frame_range: Some(FrameRange { start_frame: 0, end_frame: 10 }), timeline_range: TimelineRange { start_ms: 10_000, end_ms: 10_100 }, mapping_revision_id: Some("map-1".into()), coverage_status: AudioSpanCoverageStatus::Captured, asr_coverage: AudioSpanAsrCoverage::Pending }, encoded_bytes: vec![1], mapping: mapping() }).is_ok());
     }

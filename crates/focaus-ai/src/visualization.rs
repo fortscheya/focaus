@@ -207,16 +207,19 @@ pub fn build_generation_request(
     for excerpt in excerpts {
         reject_arbitrary_code(excerpt)?;
     }
-    Ok(json!({
-        "model": models::MULTIMODAL,
-        "prompt_version": PROMPT_VISUAL_DISCOVER_V1,
+    Ok(crate::transport::build_chat_completion_body(
+        models::MULTIMODAL,
+        PROMPT_VISUAL_DISCOVER_V1,
+        "Return only controlled visualization candidates. Never emit code, URLs, or arbitrary templates.",
+        json!({
         "snapshot_id": input.snapshot.snapshot_id,
         "supported_templates": input.supported_templates,
         "existing_semantic_keys": input.existing_keys,
         "deleted_semantic_keys": input.deleted_keys,
         "excerpts": excerpts,
         "output_contract": "controlled_visualization_candidate_v1"
-    }))
+        }),
+    ))
 }
 
 #[cfg(test)]

@@ -104,6 +104,11 @@ pub fn build_system_one_request(
     if choices.len() > 255 {
         return Err(invalid_argument("progress_choice_limit_exceeded"));
     }
+    let criteria = choices.iter().filter_map(|choice| {
+        let key = choice.get("key")?.as_str()?.to_string();
+        let description = choice.get("description")?.as_str()?.to_string();
+        Some((key, Value::String(description)))
+    }).collect::<serde_json::Map<_, _>>();
     Ok(json!({
         "model": PROGRESS_MODEL_ID,
         "protocol": "system_one",
@@ -116,13 +121,22 @@ pub fn build_system_one_request(
             "transcript": evidence.transcript_text,
             "pages": evidence.pages,
         },
-        "questions": [{
-            "id": "current_position",
-            "type": "choice",
-            "choices": choices,
-        }],
-        "metadata": { "decision_seq": snapshot.decision_seq, "calibration_seq": snapshot.calibration_seq }
+        "questions": {
+            "current_position": {
+                "type": "choice",
+                "instructions": "选择当前讲解对应的本堂课件位置；证据不足时选择 __unlocated__。",
+                "criteria": criteria,
+            }
+        }
     }))
+}
+
+pub fn parse_system_one_choice(value: &Value, question_id: &str) -> Result<String, SafeError> {
+    let answer = value.get("answers").and_then(|answers| answers.get(question_id)).ok_or_else(|| invalid("progress_answer_missing"))?;
+    if answer.get("type").and_then(Value::as_str) != Some("choice") {
+        return Err(invalid("progress_answer_type_mismatch"));
+    }
+    answer.get("choice").and_then(Value::as_str).filter(|choice| !choice.is_empty()).map(str::to_owned).ok_or_else(|| invalid("progress_choice_missing"))
 }
 
 fn validate_evidence(evidence: &ProgressEvidence) -> Result<(), SafeError> {
@@ -268,6 +282,7 @@ mod tests {
         let request = build_system_one_request(&snapshot(), &binding_for_model(ModelId::DecisionModelPreview), &evidence(Some(1000))).unwrap();
         assert_eq!(request["model"], PROGRESS_MODEL_ID);
         assert_eq!(request["state"]["transcript_cutoff_ms"], 1000);
+        assert_eq!(request["questions"]["current_position"]["type"], "choice");
         assert!(request.to_string().find("credential").is_none());
     }
 
@@ -297,5 +312,12 @@ mod tests {
         assert!(!scheduler.schedule(2).unwrap());
         assert!(scheduler.finish(1).unwrap());
         assert_eq!(scheduler.start_latest(), Some(2));
+    }
+
+    #[test]
+    fn system_one_fixture_parses_only_the_choice_answer() {
+        let value = serde_json::json!({"model":"decision-model-preview","answers":{"current_position":{"type":"choice","choice":"p1","confidence":0.9,"probabilities":{"p1":0.9,"__unlocated__":0.1}}}});
+        assert_eq!(parse_system_one_choice(&value, "current_position").unwrap(), "p1");
+        assert!(parse_system_one_choice(&serde_json::json!({"answers":{}}), "current_position").is_err());
     }
 }

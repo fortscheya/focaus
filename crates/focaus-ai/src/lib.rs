@@ -9,6 +9,7 @@ pub use focaus_contracts::HostServices;
 
 pub mod asr;
 pub mod catchup;
+pub mod fixtures;
 pub mod progress;
 pub mod secondary;
 pub mod transport;
