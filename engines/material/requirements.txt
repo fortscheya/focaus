@@ -1,0 +1,3 @@
+# The sidecar itself is dependency-free.  Optional host tools are external
+# executables (pdftoppm and soffice), discovered at runtime and never bundled
+# with user credentials or source assets.
