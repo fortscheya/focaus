@@ -26,7 +26,8 @@ manifest provenance 中标为 `engine_candidate_requires_host_confirmation`，�
 {"contract_version":"2.0.0","request_id":"...","name":"convert","task_id":"...","payload":{"material_id":"...","source_version_id":"...","parse_version_id":"...","source_handle":"/host/managed/read-only.pdf","staging_handle":"/host/task-staging","identity_pool":{},"profile":"deep","pages":[],"corrections":[],"budget_ms":600000}}
 ```
 
-结果顺序为多个 `checkpoint`/`page_result`，最后是 `completed`。每个
+结果顺序为每页先发 `page_result`，再发对应的 `checkpoint(state=running)`；所有页
+完成后先发 `checkpoint(state=completed)`，最后发 `completed`。每个
 `page_result` 都带一个新的 `snapshot_parse_version_id`、累计 `manifest` 和
 `manifest_path`，对应 `staging_handle/snapshots/<parse_version_id>.json`；文件只
 能创建一次，`parent_parse_version_id` 必须先存在。请求中的 `parse_version_id`

@@ -213,6 +213,8 @@ class MaterialEngineTests(TestCase):
             self.assertEqual(page_result["source_version_id"], values[1])
             self.assertEqual(page_result["source_hash"], manifest["source_hash"])
             self.assertEqual(page_result["parent_parse_version_id"], page_result["manifest"]["parent_parse_version_id"])
+            expected_page_parent = None if index == 0 else published[index - 1]
+            self.assertEqual(page_result["parent_parse_version_id"], expected_page_parent)
             page_value = page_result["page"]
             self.assertEqual(page_value["source_page_index"], index)
             page_region_ids = {region["region_id"] for region in page_result["regions"]}
@@ -646,7 +648,10 @@ class MaterialEngineTests(TestCase):
             self.assertEqual(page_payload["source_hash"], page_payload["manifest"]["source_hash"])
             self.assertEqual(page_payload["parse_version_id"], page_payload["manifest"]["parse_version_id"])
             self.assertEqual(page_payload["parent_parse_version_id"], page_payload["manifest"]["parent_parse_version_id"])
+            self.assertEqual(page_payload["snapshot_parse_version_id"], page_payload["parse_version_id"])
+            self.assertEqual(page_payload["manifest"]["provenance"]["publication_kind"], "page_checkpoint")
             self.assertEqual(page_payload["progress"]["material_id"], values[0])
+            self.assertEqual(page_payload["progress"]["state"], "running")
             self.assertEqual(page_payload["progress"]["publication_parse_version_id"], page_payload["parse_version_id"])
             self.assertEqual(page_payload["progress"]["publication_parent_parse_version_id"], page_payload["parent_parse_version_id"])
 
@@ -704,6 +709,7 @@ class MaterialEngineTests(TestCase):
             self.assertEqual(completed_payload["source_hash"], final_manifest["source_hash"])
             self.assertEqual(completed_payload["parse_version_id"], final_manifest["parse_version_id"])
             self.assertIsNone(completed_payload["parent_parse_version_id"])
+            self.assertEqual(completed_payload["manifest"]["provenance"]["publication_kind"], "final")
             self.assertEqual(completed_payload["progress"]["state"], "completed")
             self.assertEqual(completed_payload["progress"]["parse_version_id"], final_manifest["parse_version_id"])
             self.assertEqual(completed_payload["progress"]["publication_parse_version_id"], completed_payload["parse_version_id"])
