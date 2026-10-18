@@ -6,7 +6,7 @@ import {StatusBadge} from './StatusBadge.tsx';
 import {NativeSearchPanel} from './NativeSearchPanel.tsx';
 import {NativeContentRenderer} from './NativeContentRenderer.tsx';
 import type {NativeProjection} from '../nativeContentProjection.ts';
-import type {MaterialImportAdapter} from '../material/materialAdapter.ts';
+import type {MaterialImportAdapter, MaterialTaskFeedback} from '../material/materialAdapter.ts';
 import {MaterialStatePanel} from '../material/MaterialStatePanel.tsx';
 import {buildNativePaneSlots, type NativePaneSlot} from './nativeWorkspaceLayout.ts';
 
@@ -58,6 +58,8 @@ export function NativeWorkspace({
   views,
   projections,
   materialImportAdapter,
+  materialTaskFeedback,
+  onRefreshMaterial,
   contentHeadCount,
   eventSeq,
   snapshotSeq,
@@ -83,6 +85,8 @@ export function NativeWorkspace({
   views: ContentView[];
   projections: Record<string, NativeProjection>;
   materialImportAdapter: MaterialImportAdapter | null;
+  materialTaskFeedback: MaterialTaskFeedback | null;
+  onRefreshMaterial: () => Promise<void>;
   contentHeadCount: number;
   eventSeq: number;
   snapshotSeq: number;
@@ -169,7 +173,7 @@ export function NativeWorkspace({
           {notice ? <div className="inline-notice" role="status">{notice}{notice.includes('事件批次') ? <Button size="sm" variant="outline" onPress={onRetryEvents}>重试未确认事件</Button> : null}</div> : null}
           <NativeLayerSummary projections={projections} />
           <section className="native-content-surface" aria-labelledby="native-content-title"><div className="native-surface-heading"><div><p className="eyebrow">ContentView · content.get projection</p><h2 id="native-content-title">课堂内容窗</h2><p>主窗显示当前真实 projection，其余 view 保持独立状态；空态只说明宿主尚未返回内容。</p></div><div className="native-surface-actions"><Button size="sm" variant="ghost" onPress={onOpenSearch}>搜索当前课堂</Button><Button size="sm" variant="secondary" onPress={() => onOpenView('grid')}>打开六格 view</Button><Button size="sm" variant="ghost" onPress={() => onOpenView('standalone')}>独立窗口</Button></div></div><div className={`native-pane-grid ${expandedPrimary ? 'is-primary-expanded' : ''}`} aria-label="正式 native 内容窗">{paneSlots.map((slot) => <NativePane key={slot.id} slot={slot} adapter={adapter} onOpenView={onOpenView} onOpenSearch={onOpenSearch} />)}</div></section>
-          <MaterialStatePanel lessonId={lesson?.lesson_id ?? null} projections={projections} views={views} activeView={activeView} importAdapter={materialImportAdapter} />
+          <MaterialStatePanel lessonId={lesson?.lesson_id ?? null} projections={projections} views={views} activeView={activeView} importAdapter={materialImportAdapter} taskFeedback={materialTaskFeedback} onRefresh={onRefreshMaterial} />
           {!lesson ? <div className="native-empty-action"><Button onPress={onBack}>返回创建课堂</Button></div> : null}
         </main>
       )}

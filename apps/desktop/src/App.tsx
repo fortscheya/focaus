@@ -22,6 +22,7 @@ import {
 import {SerialNativeEventQueue} from './app/nativeEventQueue.ts';
 import {classifyRecordingEvent} from './app/nativeRecordingEvents.ts';
 import {detectNativeProjection, nativeProjectionRevision, NativeProjectionGate, type NativeProjection} from './nativeContentProjection.ts';
+import type {MaterialTaskFeedback} from './material/materialAdapter.ts';
 import type {SearchResultView} from './search/searchIndex.ts';
 
 type Screen = 'home' | 'workspace';
@@ -130,6 +131,32 @@ function parseRecordingCoverage(value: unknown): {recording_id: string; kind: 'a
   return null;
 }
 
+function taskStatus(value: unknown): MaterialTaskFeedback['status'] | null {
+  if (value === 'queued' || value === 'waiting_network' || value === 'waiting_input' || value === 'retry_wait' || value === 'cancel_requested') return 'accepted';
+  if (value === 'running' || value === 'paused' || value === 'interrupted') return 'running';
+  if (value === 'succeeded') return 'completed';
+  if (value === 'failed' || value === 'cancelled' || value === 'superseded') return 'failed';
+  return null;
+}
+
+function materialTaskFeedbackFromEvent(event: EventBatch['events'][number], current: MaterialTaskFeedback | null): MaterialTaskFeedback | null {
+  const payload = asRecord(event.payload);
+  const task = asRecord(payload?.task) ?? payload;
+  const kind = task?.kind ?? payload?.kind;
+  const taskId = typeof task?.task_id === 'string' ? task.task_id : event.entity_id;
+  if (kind !== 'material_convert' && kind !== 'material_reparse' && current?.taskId !== taskId) return null;
+  const status = taskStatus(task?.state ?? payload?.state);
+  if (!status) return null;
+  return {
+    status,
+    taskId,
+    materialId: typeof payload?.material_id === 'string' ? payload.material_id : current?.materialId ?? null,
+    sourceVersionId: typeof payload?.source_version_id === 'string' ? payload.source_version_id : current?.sourceVersionId ?? null,
+    parseVersionId: typeof payload?.parse_version_id === 'string' ? payload.parse_version_id : current?.parseVersionId ?? null,
+    message: status === 'completed' ? '宿主任务已完成；仍以新的 content head/projection revision 为准。' : status === 'failed' ? '宿主资料任务失败；保留旧 projection，不以失败结果替换当前内容。' : status === 'running' ? '宿主资料任务运行中；已接受不等于完成。' : '宿主已接受资料任务，等待 page_ready/parse_changed 和最终 task 状态。',
+  };
+}
+
 function extractViewsFromSnapshot(snapshot: unknown): ContentView[] {
   const record = asRecord(snapshot);
   const records = record ? asRecord(record.records) : null;
@@ -178,6 +205,7 @@ export function App() {
   const [watermarkMs, setWatermarkMs] = useState(initialRecording.watermarkMs);
   const [moveState, setMoveState] = useState<'grid' | 'preparing' | 'detached'>('grid');
   const [nativeNotice, setNativeNotice] = useState('');
+  const [materialTaskFeedback, setMaterialTaskFeedback] = useState<MaterialTaskFeedback | null>(null);
   const nativeRuntimeRef = useRef<NativeRuntime | null>(null);
   const pendingEventBatches = useRef<EventBatch[]>([]);
   const failedNativeBatch = useRef<EventBatch | null>(null);
@@ -187,27 +215,56 @@ export function App() {
   const lessonRef = useRef<Lesson | null>(null);
   const recordingRef = useRef<RecordingSession | null>(null);
   const contentHeadsRef = useRef<Record<string, unknown>>({});
+  const materialTaskFeedbackRef = useRef<MaterialTaskFeedback | null>(null);
   const projectionGate = useRef(new NativeProjectionGate());
   const adapter: HostAdapter = runtime?.adapter ?? fixtureAdapter;
+  const materialImportAdapter = useMemo(() => runtime?.mode === 'native' ? createNativeMaterialImportAdapter((result) => {
+    if (result.status === 'accepted') {
+      setMaterialTaskFeedback({
+        status: 'accepted',
+        taskId: result.taskId ?? null,
+        materialId: result.materialId ?? null,
+        sourceVersionId: result.sourceVersionId ?? null,
+        parseVersionId: result.parseVersionId ?? null,
+        message: result.message,
+      });
+    }
+  }) : null, [runtime?.mode]);
 
   useEffect(() => { courseRef.current = course; }, [course]);
   useEffect(() => { lessonRef.current = lesson; }, [lesson]);
   useEffect(() => { recordingRef.current = recordingSession; }, [recordingSession]);
+  useEffect(() => { materialTaskFeedbackRef.current = materialTaskFeedback; }, [materialTaskFeedback]);
 
   const processNativeEventBatch = useCallback((batch: EventBatch) => {
     const scheduled = nativeEventQueue.current.enqueue(batch, async (nextBatch) => {
       const activeRuntime = nativeRuntimeRef.current;
       if (!activeRuntime) throw new Error('native runtime disappeared before event projection');
       for (const event of nextBatch.events) {
+        const payloadRecord = asRecord(event.payload);
+        const isMaterialProgressEvent = event.event_type === 'material.page_ready' || event.event_type === 'material.parse_changed';
+        const payloadMaterialId = typeof payloadRecord?.material_id === 'string' ? payloadRecord.material_id : null;
+        const scopedMaterialId = lessonRef.current?.material_scope.includes(event.entity_id) ? event.entity_id : null;
+        const materialProjectionId = isMaterialProgressEvent ? payloadMaterialId ?? scopedMaterialId : null;
+        const requestedProjectionRevision = isMaterialProgressEvent ? (typeof payloadRecord?.parse_version_id === 'string' ? payloadRecord.parse_version_id : null) : event.revision_id;
         const isViewEvent = event.event_type.startsWith('workspace.view_') || event.event_type.startsWith('view.');
         const isVisualizationChangedEvent = event.event_type === 'visualization.changed';
-        const isContentProjectionEvent = event.event_type.startsWith('content.') || isVisualizationChangedEvent;
+        const isContentProjectionEvent = event.event_type.startsWith('content.') || isVisualizationChangedEvent || materialProjectionId !== null;
+        const projectionEntityId = materialProjectionId ?? event.entity_id;
         const recordingEventKind = event.event_type.startsWith('recording.') ? classifyRecordingEvent(event.event_type, event.entity_id, recordingRef.current?.recording_id ?? null) : 'unknown';
         const isRecordingCoverageEvent = recordingEventKind === 'coverage';
         const isRecordingWatermarkEvent = recordingEventKind === 'watermark';
         const isRecordingSessionEvent = recordingEventKind === 'session';
         const isNormalEntityEvent = isRecordingSessionEvent || isRecordingCoverageEvent || isRecordingWatermarkEvent || event.event_type.startsWith('course.') || event.event_type.startsWith('lesson.') || isContentProjectionEvent || isViewEvent;
         const isKnownProjectionEvent = event.event_type.startsWith('search.') || event.event_type.startsWith('task.') || event.event_type.startsWith('visualization.') || event.event_type.startsWith('focaus.') || event.event_type.startsWith('progress.') || event.event_type.startsWith('material.') || event.event_type.startsWith('language.') || event.event_type.startsWith('state.') || event.event_type.startsWith('workspace.');
+        if (event.event_type === 'task.changed') {
+          const feedback = materialTaskFeedbackFromEvent(event, materialTaskFeedbackRef.current);
+          if (feedback) {
+            materialTaskFeedbackRef.current = feedback;
+            setMaterialTaskFeedback(feedback);
+            setNativeNotice(feedback.message);
+          }
+        }
         if (!isNormalEntityEvent && !isKnownProjectionEvent) throw new Error(`未知 native event type：${event.event_type}；未 ACK，等待重试或重新 state.open`);
         if (isKnownProjectionEvent && !isNormalEntityEvent) {
           setNativeNotice(`已路由 ${event.event_type} projection 事件；当前 native 内容等待宿主投影读取。`);
@@ -217,7 +274,7 @@ export function App() {
         if (!affectsProjection) continue;
         const isDeleted = event.event_type.includes('deleted') || event.event_type.includes('removed');
         if (isDeleted) {
-          if (isContentProjectionEvent) projectionGate.current.begin(event.entity_id, event.revision_id);
+          if (isContentProjectionEvent) projectionGate.current.begin(projectionEntityId, requestedProjectionRevision);
           if (recordingRef.current?.recording_id === event.entity_id) {
             recordingRef.current = null;
             setRecordingSession(null);
@@ -236,14 +293,14 @@ export function App() {
             setActiveNativeViewId((current) => current === event.entity_id ? null : current);
           }
           if (isContentProjectionEvent) {
-            delete contentHeadsRef.current[event.entity_id];
+            delete contentHeadsRef.current[projectionEntityId];
             setNativeContentHeads({...contentHeadsRef.current});
-            setNativeProjections((current) => {const next = {...current}; delete next[event.entity_id]; return next;});
+            setNativeProjections((current) => {const next = {...current}; delete next[projectionEntityId]; return next;});
           }
           continue;
         }
-        if (isContentProjectionEvent) projectionGate.current.begin(event.entity_id, event.revision_id);
-        const response = await activeRuntime.adapter.invoke('content.get', {entity_id: event.entity_id, revision_id: event.revision_id, selector: null}, makeEnvelope('content.get', undefined, {[event.entity_id]: event.revision_id}));
+        if (isContentProjectionEvent) projectionGate.current.begin(projectionEntityId, requestedProjectionRevision);
+        const response = await activeRuntime.adapter.invoke('content.get', {entity_id: projectionEntityId, revision_id: requestedProjectionRevision, selector: null}, makeEnvelope('content.get', undefined, requestedProjectionRevision ? {[projectionEntityId]: requestedProjectionRevision} : {}));
         if (response.status === 'error') throw new Error(`事件 ${event.event_type} 的 content.get 失败：${response.error?.message ?? response.error?.code ?? 'unknown error'}`);
         if (isRecordingCoverageEvent) {
           const coverageRecord = asRecord(response.result);
@@ -297,12 +354,24 @@ export function App() {
           setLesson(nextLesson);
         } else if (isContentProjectionEvent) {
           const responseRevision = nativeProjectionRevision(response.result, null);
-          if (responseRevision !== event.revision_id) throw new Error(`事件 ${event.event_type} 的 content.get 返回 revision ${responseRevision ?? 'unknown'}，期待 ${event.revision_id}`);
-          const nextProjection = detectNativeProjection(response.result, event.entity_id, event.revision_id);
-          if (nextProjection.revisionId !== event.revision_id) throw new Error(`事件 ${event.event_type} 的 projection revision 未回填为 ${event.revision_id}`);
-          contentHeadsRef.current[event.entity_id] = response.result;
+          if (!responseRevision || requestedProjectionRevision !== null && responseRevision !== requestedProjectionRevision) throw new Error('projection response revision mismatch');
+          const nextProjection = detectNativeProjection(response.result, projectionEntityId, responseRevision);
+          if (nextProjection.revisionId !== responseRevision) throw new Error('projection revision was not returned');
+          contentHeadsRef.current[projectionEntityId] = response.result;
           setNativeContentHeads({...contentHeadsRef.current});
-          setNativeProjections((current) => ({...current, [event.entity_id]: nextProjection}));
+          setNativeProjections((current) => ({...current, [projectionEntityId]: nextProjection}));
+          if (isMaterialProgressEvent && materialTaskFeedbackRef.current) {
+            const materialValue = asRecord(nextProjection.value);
+            const feedback: MaterialTaskFeedback = {
+              ...materialTaskFeedbackRef.current,
+              status: materialTaskFeedbackRef.current.status === 'completed' || materialTaskFeedbackRef.current.status === 'failed' ? materialTaskFeedbackRef.current.status : 'partial',
+              materialId: projectionEntityId,
+              parseVersionId: typeof materialValue?.parse_version_id === 'string' ? materialValue.parse_version_id : materialTaskFeedbackRef.current.parseVersionId,
+              message: '宿主已发布新的 material page/parse projection；仍等待 task 终态，旧 revision 未被顶替。',
+            };
+            materialTaskFeedbackRef.current = feedback;
+            setMaterialTaskFeedback(feedback);
+          }
         } else if (isViewEvent) {
           const nextView = parseContentViewResponse(response.result);
           if (!nextView) throw new Error(`事件 ${event.event_type} 的 content.get 未返回合法 ContentView`);
@@ -460,6 +529,49 @@ export function App() {
   const invoke = useCallback(async <N extends CommandName>(name: N, payload: unknown, expectedRevisions: Record<string, string> = {}): Promise<CommandResult> => {
     return adapter.invoke(name, payload as never, makeEnvelope(name, undefined, expectedRevisions));
   }, [adapter]);
+
+  const refreshNativeMaterial = useCallback(async () => {
+    if (runtime?.mode !== 'native') return;
+    const materialId = lessonRef.current?.material_scope[0] ?? null;
+    if (!materialId) {
+      setNativeNotice('当前 lesson 尚未返回 material_scope；不会猜测资料实体 ID。');
+      return;
+    }
+    const token = projectionGate.current.begin(materialId, null);
+    setNativeNotice('正在读取宿主当前 material head；旧 projection 保持可见，直到新 revision 校验通过。');
+    const response = await adapter.invoke('content.get', {entity_id: materialId, revision_id: null, selector: null}, makeEnvelope('content.get'));
+    if (response.status === 'error' || !response.result) {
+      setNativeNotice('读取 material head 失败：' + (response.error?.message ?? response.error?.code ?? 'unknown error'));
+      return;
+    }
+    const responseRevision = nativeProjectionRevision(response.result, null);
+    if (!responseRevision || !projectionGate.current.accepts(materialId, token, responseRevision)) {
+      setNativeNotice('material head 没有返回可校验 revision；保留当前 projection。');
+      return;
+    }
+    const current = nativeProjections[materialId];
+    if (current?.revisionId === responseRevision) {
+      setNativeNotice('宿主返回的 material head 与当前 revision 相同；没有替换当前 projection。');
+      return;
+    }
+    const nextProjection = detectNativeProjection(response.result, materialId, responseRevision);
+    contentHeadsRef.current[materialId] = response.result;
+    setNativeContentHeads({...contentHeadsRef.current});
+    setNativeProjections((currentProjections) => ({...currentProjections, [materialId]: nextProjection}));
+    const value = asRecord(nextProjection.value);
+    if (materialTaskFeedbackRef.current) {
+      const feedback: MaterialTaskFeedback = {
+        ...materialTaskFeedbackRef.current,
+        materialId,
+        sourceVersionId: typeof value?.source_version_id === 'string' ? value.source_version_id : materialTaskFeedbackRef.current.sourceVersionId,
+        parseVersionId: typeof value?.parse_version_id === 'string' ? value.parse_version_id : responseRevision,
+        message: '已刷新宿主 material head；旧 revision 未覆盖新 revision。',
+      };
+      materialTaskFeedbackRef.current = feedback;
+      setMaterialTaskFeedback(feedback);
+    }
+    setNativeNotice('material head 已刷新为 revision ' + responseRevision + '；搜索 scope 需由宿主 search.refresh 重新确认。');
+  }, [adapter, nativeProjections, runtime?.mode]);
 
   const updateRecordingFixture = (nextState: RecordingState) => {
     setRecordingState(nextState);
@@ -683,7 +795,7 @@ export function App() {
 
   if (isNativeRuntime) {
     const activeNativeView = nativeViews.find((view) => view.view_id === activeNativeViewId) ?? nativeViews[0] ?? null;
-    return <NativeWorkspace course={course} lesson={lesson} recording={recordingSession} adapter={adapter} activeView={activeNativeView} views={nativeViews} projections={nativeProjections} materialImportAdapter={createNativeMaterialImportAdapter()} contentHeadCount={Object.keys(nativeContentHeads).length} eventSeq={eventSeq} snapshotSeq={snapshotSeq} notice={nativeNotice} screen={screen} onCreateCourseLesson={createCourseLesson} onOpenWorkspace={() => setScreen('workspace')} onBack={() => setScreen('home')} onToggleRecording={() => void toggleRecording()} onStopRecording={() => void stopRecording()} onStartUnassigned={() => void startRecording()} onRetryEvents={retryNativeEvents} onOpenView={(placement) => void openNativeView(placement)} searchOpen={searchOpen} onOpenSearch={() => setSearchOpen(true)} onCloseSearch={() => setSearchOpen(false)} />;
+    return <NativeWorkspace course={course} lesson={lesson} recording={recordingSession} adapter={adapter} activeView={activeNativeView} views={nativeViews} projections={nativeProjections} materialImportAdapter={materialImportAdapter} materialTaskFeedback={materialTaskFeedback} onRefreshMaterial={refreshNativeMaterial} contentHeadCount={Object.keys(nativeContentHeads).length} eventSeq={eventSeq} snapshotSeq={snapshotSeq} notice={nativeNotice} screen={screen} onCreateCourseLesson={createCourseLesson} onOpenWorkspace={() => setScreen('workspace')} onBack={() => setScreen('home')} onToggleRecording={() => void toggleRecording()} onStopRecording={() => void stopRecording()} onStartUnassigned={() => void startRecording()} onRetryEvents={retryNativeEvents} onOpenView={(placement) => void openNativeView(placement)} searchOpen={searchOpen} onOpenSearch={() => setSearchOpen(true)} onCloseSearch={() => setSearchOpen(false)} />;
   }
 
   return (

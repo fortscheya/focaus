@@ -29,10 +29,11 @@ describe('material projection state', () => {
 
   it('drops an old async material revision before it can overwrite the latest request', () => {
     const gate = new MaterialRevisionGate();
-    const oldRequest = gate.begin('material-1');
-    const newRequest = gate.begin('material-1');
-    expect(gate.accepts('material-1', oldRequest)).toBe(false);
-    expect(gate.accepts('material-1', newRequest)).toBe(true);
+    const oldRequest = gate.begin('material-1', 'parse-1');
+    const newRequest = gate.begin('material-1', 'parse-2');
+    expect(gate.accepts('material-1', oldRequest, 'parse-1')).toBe(false);
+    expect(gate.accepts('material-1', newRequest, 'parse-1')).toBe(false);
+    expect(gate.accepts('material-1', newRequest, 'parse-2')).toBe(true);
   });
 });
 

@@ -242,11 +242,10 @@ type NativeMaterialJobHandle = {
 };
 
 /**
- * The native material flow is deliberately two phase: the host picker first
- * owns and copies the original, then the local sidecar converts that managed
- * source. No filesystem path crosses this bridge.
+ * The picker and managed source handle stay inside the Tauri host. The web
+ * layer receives only the task identity and waits for task/material events.
  */
-export function createNativeMaterialImportAdapter(): MaterialImportAdapter {
+export function createNativeMaterialImportAdapter(onAccepted?: (result: MaterialImportResult) => void): MaterialImportAdapter {
   return {
     mode: 'native',
     async requestMaterialImport(request: MaterialImportRequest): Promise<MaterialImportResult> {
@@ -257,14 +256,19 @@ export function createNativeMaterialImportAdapter(): MaterialImportAdapter {
           pages: request.pages,
         });
         await tauriInvoke<unknown>('focaus_material_convert', {taskId: job.task_id});
-        return {
+        const result: MaterialImportResult = {
           status: 'accepted',
           taskId: job.task_id,
-          message: `资料已由宿主托管并完成本地转换任务 ${job.task_id}；正文以事件和 content.get 投影为准。`,
+          materialId: job.material_id,
+          sourceVersionId: job.source_version_id,
+          parseVersionId: job.parse_version_id,
+          message: '宿主已接受资料托管与转换任务；等待 task/material.page_ready 事件和新的 content head，不把 accepted 当作 completed。',
         };
+        onAccepted?.(result);
+        return result;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        return {status: 'error', message: `资料导入未完成：${message}`};
+        return {status: 'error', message: '资料导入未完成：' + message};
       }
     },
   };

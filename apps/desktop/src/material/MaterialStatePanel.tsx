@@ -3,7 +3,7 @@ import {Button, Card} from '@heroui/react';
 import type {ContentView} from '@focaus/contracts';
 import type {NativeProjection} from '../nativeContentProjection.ts';
 import {StatusBadge} from '../components/StatusBadge.tsx';
-import type {MaterialImportAdapter, MaterialPurpose} from './materialAdapter.ts';
+import type {MaterialImportAdapter, MaterialPurpose, MaterialTaskFeedback} from './materialAdapter.ts';
 import {buildMaterialLayerStates, type MaterialLayerState} from './materialState.ts';
 
 const layerLabels: Record<MaterialLayerState['layer'], string> = {
@@ -30,12 +30,21 @@ function statusLabel(status: MaterialLayerState['status']): string {
   return 'empty';
 }
 
+function taskTone(status: MaterialTaskFeedback['status']): 'neutral' | 'success' | 'warning' | 'danger' {
+  if (status === 'completed') return 'success';
+  if (status === 'failed' || status === 'error') return 'danger';
+  if (status === 'partial' || status === 'running' || status === 'accepted') return 'warning';
+  return 'neutral';
+}
+
 export function MaterialStatePanel({
   lessonId,
   projections,
   views,
   activeView,
   importAdapter,
+  taskFeedback = null,
+  onRefresh,
   fixture = false,
 }: {
   lessonId: string | null;
@@ -43,21 +52,31 @@ export function MaterialStatePanel({
   views: ContentView[];
   activeView: ContentView | null;
   importAdapter: MaterialImportAdapter | null;
+  taskFeedback?: MaterialTaskFeedback | null;
+  onRefresh?: () => Promise<void> | void;
   fixture?: boolean;
 }) {
   const [purpose, setPurpose] = useState<MaterialPurpose>('courseware');
-  const [importState, setImportState] = useState<{status: 'idle' | 'running' | 'accepted' | 'error'; message: string}>({status: 'idle', message: ''});
+  const [importState, setImportState] = useState<MaterialTaskFeedback>({status: 'idle', taskId: null, materialId: null, sourceVersionId: null, parseVersionId: null, message: ''});
   const states = buildMaterialLayerStates({projections, views, activeView});
   const hasLesson = Boolean(lessonId);
+  const feedback = taskFeedback ?? importState;
 
   const requestImport = async () => {
     if (!lessonId || !importAdapter) {
-      setImportState({status: 'error', message: '等待宿主文件选择入口；前端不接收或猜测文件路径。'});
+      setImportState({status: 'error', taskId: null, materialId: null, sourceVersionId: null, parseVersionId: null, message: '等待宿主文件选择入口；前端不接收或猜测文件路径。'});
       return;
     }
-    setImportState({status: 'running', message: '正在请求宿主文件选择…'});
+    setImportState({status: 'running', taskId: null, materialId: null, sourceVersionId: null, parseVersionId: null, message: '正在请求宿主文件选择…'});
     const result = await importAdapter.requestMaterialImport({lessonId, purpose, pages: []});
-    setImportState({status: result.status === 'accepted' ? 'accepted' : 'error', message: result.message});
+    setImportState({
+      status: result.status === 'accepted' ? 'accepted' : 'error',
+      taskId: result.taskId ?? null,
+      materialId: result.materialId ?? null,
+      sourceVersionId: result.sourceVersionId ?? null,
+      parseVersionId: result.parseVersionId ?? null,
+      message: result.message,
+    });
   };
 
   return (
@@ -66,12 +85,19 @@ export function MaterialStatePanel({
         <div><p className="eyebrow">资料导入 · 三层内容边界</p><h2 id="material-state-title">材料与内容状态</h2></div>
         <div className="material-state-heading-actions">
           {fixture ? <StatusBadge tone="warning">fixture · 只读演示</StatusBadge> : <StatusBadge tone="success">native · content.get</StatusBadge>}
+          {feedback.status !== 'idle' ? <StatusBadge tone={taskTone(feedback.status)}>{feedback.status}</StatusBadge> : null}
           <select className="native-select" aria-label="资料用途" value={purpose} onChange={(event) => setPurpose(event.target.value as MaterialPurpose)}><option value="courseware">课件</option><option value="textbook">教材</option><option value="reference">参考资料</option></select>
-          <Button size="sm" onPress={() => void requestImport()} isPending={importState.status === 'running'} isDisabled={!hasLesson || fixture}>{fixture ? 'fixture 不导入' : '从宿主选择文件'}</Button>
+          <Button size="sm" onPress={() => void requestImport()} isPending={importState.status === 'running'} isDisabled={!hasLesson || fixture || importState.status === 'accepted' || importState.status === 'running'}>{fixture ? 'fixture 不导入' : '从宿主选择文件'}</Button>
+          {onRefresh ? <Button size="sm" variant="ghost" onPress={() => void onRefresh()}>刷新宿主状态</Button> : null}
         </div>
       </div>
       <div className="material-import-boundary"><span className="material-import-lock" aria-hidden="true">▣</span><span>导入只传 lesson、用途和页范围给宿主 adapter；文件路径、授权和托管 source handle 由宿主控制。</span><span className="fixture-label">{importAdapter ? `adapter · ${importAdapter.mode}` : 'adapter · 未接线'}</span></div>
-      {importState.message ? <div className={importState.status === 'error' ? 'error-notice' : 'inline-notice'} role="status">{importState.message}</div> : null}
+      {(() => {
+        const feedback = taskFeedback ?? importState;
+        if (!feedback.message) return null;
+        const error = feedback.status === 'error' || feedback.status === 'failed';
+        return <div className={error ? 'error-notice' : feedback.status === 'partial' ? 'warning-notice' : 'inline-notice'} role="status">{feedback.message}{feedback.taskId ? ' · task ' + feedback.taskId : ''}</div>;
+      })()}
       <div className="material-layer-grid">
         {states.map((state) => (
           <Card key={state.layer} className="material-layer-card" variant="secondary">

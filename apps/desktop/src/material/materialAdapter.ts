@@ -1,5 +1,7 @@
 export type MaterialPurpose = 'textbook' | 'courseware' | 'reference';
 
+export type MaterialTaskStatus = 'idle' | 'accepted' | 'running' | 'partial' | 'completed' | 'failed' | 'error';
+
 export interface MaterialImportRequest {
   lessonId: string;
   purpose: MaterialPurpose;
@@ -9,6 +11,18 @@ export interface MaterialImportRequest {
 export interface MaterialImportResult {
   status: 'accepted' | 'error';
   taskId?: string;
+  materialId?: string;
+  sourceVersionId?: string;
+  parseVersionId?: string;
+  message: string;
+}
+
+export interface MaterialTaskFeedback {
+  status: MaterialTaskStatus;
+  taskId: string | null;
+  materialId: string | null;
+  sourceVersionId: string | null;
+  parseVersionId: string | null;
   message: string;
 }
 

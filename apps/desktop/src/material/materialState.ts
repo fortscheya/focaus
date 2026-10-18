@@ -91,16 +91,20 @@ export function buildMaterialLayerStates({
 
 export class MaterialRevisionGate {
   private latest = new Map<string, number>();
+  private revisions = new Map<string, string | null>();
   private sequence = 0;
 
-  begin(key: string): number {
+  begin(key: string, revisionId: string | null = null): number {
     const token = ++this.sequence;
     this.latest.set(key, token);
+    this.revisions.set(key, revisionId);
     return token;
   }
 
-  accepts(key: string, token: number): boolean {
-    return this.latest.get(key) === token;
+  accepts(key: string, token: number, actualRevisionId: string | null = null): boolean {
+    if (this.latest.get(key) !== token) return false;
+    const requestedRevisionId = this.revisions.get(key) ?? null;
+    return requestedRevisionId === null || requestedRevisionId === actualRevisionId;
   }
 }
 
