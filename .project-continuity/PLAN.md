@@ -22,6 +22,10 @@
 - The route uses only local curated DeepLearning-derived sample text. It visibly states local Demo data, does not upload audio, and does not invoke the four cloud models. This is a reviewable UI/demo path, not real ASR or full product acceptance.
 - Demo 已在 `18251de` 提交；typecheck、12项桌面测试、build 和独立端口 `?demo=1` 可见路由检查均通过。真实 streaming ASR 继续受此前云/数据/费用授权边界约束。
 
+## Completed: Submission Documents (2026-10-18)
+- 已完成两份申报 Word：项目说明 3 页、技术及第三方资源说明 6 页；全部 9 页渲染与视觉检查、DOCX 完整性和必需章节检查通过。成员、第三方资源及验证边界见 `docs/SUBMISSION.md`。
+- 文档交付已完成；原创声明签署与外部课件／录音／图标授权确认仍由团队处理，未代为上传或提交。
+
 ## Later / Explicitly Deferred
 - 系统声音在麦克风/已有录音闭环后；Web/iOS联动、按实际课次自动组织、终端用户服务配置、长期隐私留存策略后续。
 - 首版不规划录音以外离线能力，不处理课件音视频/外链内容；不实现转场/逐步播放。
