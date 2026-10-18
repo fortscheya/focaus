@@ -46,6 +46,18 @@ def make_pptx(path: Path):
         archive.writestr("ppt/slides/slide1.xml", slide)
 
 
+def make_rich_pptx(path: Path):
+    slide = '''<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:sp><p:nvSpPr><p:cNvPr id="2" name="A"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="2000000" cy="1000000"/></a:xfrm></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>A</a:t></a:r></a:p></p:txBody></p:sp><p:sp><p:nvSpPr><p:cNvPr id="3" name="B"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="4000000" y="0"/><a:ext cx="2000000" cy="1000000"/></a:xfrm></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>B</a:t></a:r></a:p></p:txBody></p:sp><p:cxnSp><p:nvCxnSpPr><p:cNvPr id="4" name="Arrow"/><p:cNvCxnSpPr/><p:nvPr/></p:nvCxnSpPr><p:spPr><a:xfrm><a:off x="2000000" y="500000"/><a:ext cx="2000000" cy="0"/></a:xfrm><a:prstGeom prst="line"><a:avLst/></a:prstGeom><p:stCxn id="2" idx="0"/><p:endCxn id="3" idx="0"/></p:spPr></p:cxnSp><p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="5" name="Chart"/><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="0" y="2000000"/><a:ext cx="5000000" cy="2500000"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="rId1"/></a:graphicData></a:graphic></p:graphicFrame></p:spTree></p:cSld></p:sld>'''
+    relationships = '''<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart1.xml"/></Relationships>'''
+    chart = '''<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:plotArea><c:lineChart><c:axId val="1"/><c:axId val="2"/><c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:v>Series A</c:v></c:tx><c:cat><c:strRef><c:strCache><c:ptCount val="2"/><c:pt idx="0"><c:v>Jan</c:v></c:pt><c:pt idx="1"><c:v>Feb</c:v></c:pt></c:strCache></c:strRef></c:cat><c:val><c:numRef><c:numCache><c:ptCount val="2"/><c:pt idx="0"><c:v>1</c:v></c:pt><c:pt idx="1"><c:v>2</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser></c:lineChart><c:catAx><c:axId val="1"/></c:catAx><c:valAx><c:axId val="2"/></c:valAx></c:plotArea></c:chart></c:chartSpace>'''
+    presentation = '<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:sldSz cx="9144000" cy="6858000"/></p:presentation>'
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("ppt/presentation.xml", presentation)
+        archive.writestr("ppt/slides/slide1.xml", slide)
+        archive.writestr("ppt/slides/_rels/slide1.xml.rels", relationships)
+        archive.writestr("ppt/charts/chart1.xml", chart)
+
+
 class MaterialEngineTests(TestCase):
     def setUp(self):
         self.root = Path(tempfile.mkdtemp(prefix="focaus-material-test-"))
@@ -143,6 +155,19 @@ class MaterialEngineTests(TestCase):
         response = protocol.handle({"contract_version": "1.0.0", "request_id": str(uuid.uuid4()), "name": "handshake", "task_id": None, "payload": {}})[0]
         self.assertEqual(response["kind"], "error")
         self.assertEqual(response["payload"]["error"]["code"], "UNSUPPORTED_VERSION")
+
+    def test_pptx_reconstructs_chart_values_and_connector_diagram(self):
+        source = self.root / "rich.pptx"
+        make_rich_pptx(source)
+        values, payload = self.payload(source, profile="deep", stage_name="rich")
+        manifest = self.engine.convert(payload, task_id=values[3])["manifest"]
+        chart = next(obj for obj in manifest["objects"] if obj["type"] == "data_chart")
+        diagram = next(obj for obj in manifest["objects"] if obj["type"] == "structure_diagram")
+        self.assertEqual(manifest["completion"], "complete")
+        self.assertEqual(chart["status"], "complete")
+        self.assertEqual([point["y"] for point in chart["content"]["series"][0]["points"]], [1.0, 2.0])
+        self.assertEqual(diagram["status"], "complete")
+        self.assertEqual(diagram["content"]["edges"][0]["status"], "known")
 
     def test_resume_rejects_changed_source_and_parse_version(self):
         source = self.root / "resume-guard.pdf"
@@ -290,3 +315,15 @@ class MaterialEngineTests(TestCase):
                 process.stdout.close()
             if process.stderr:
                 process.stderr.close()
+
+    def test_cancel_before_worker_registration_is_preserved(self):
+        source = self.root / "early-cancel.pdf"
+        make_pdf(source, ["early"])
+        values, payload = self.payload(source, stage_name="early-cancel")
+        protocol = EngineProtocol()
+        cancel = {"contract_version": "2.0.0", "request_id": str(uuid.uuid4()), "name": "cancel", "task_id": values[3], "payload": {}}
+        self.assertEqual(protocol.handle(cancel)[0]["kind"], "checkpoint")
+        convert = {"contract_version": "2.0.0", "request_id": str(uuid.uuid4()), "name": "convert", "task_id": values[3], "payload": payload}
+        responses = protocol.handle(convert)
+        self.assertEqual(responses[-1]["kind"], "error")
+        self.assertEqual(responses[-1]["payload"]["error"]["code"], "CANCELLED")

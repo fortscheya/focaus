@@ -147,6 +147,7 @@ class MaterialEngine:
 
     def __init__(self) -> None:
         self._cancel_events: Dict[str, Event] = {}
+        self._pending_cancels = set()
         self._lock = Lock()
 
     @staticmethod
@@ -165,6 +166,12 @@ class MaterialEngine:
             event = self._cancel_events.get(task_id)
             if event is not None:
                 event.set()
+            elif len(self._pending_cancels) < 128:
+                # The JSONL reader can receive cancel immediately after a
+                # convert request, before the worker has registered its event.
+                # Keep a bounded marker so that early cancellation is not
+                # silently lost or allowed to grow without limit.
+                self._pending_cancels.add(task_id)
 
     def _validate_payload(self, payload: Mapping[str, object]) -> Tuple[dict, Path, Path, str, List[int], IdentityAllocator, Optional[str]]:
         if not isinstance(payload, Mapping):
@@ -201,6 +208,8 @@ class MaterialEngine:
         if source_kind == "unsupported":
             raise EngineError("UNSUPPORTED_CAPABILITY", "material source type is not supported by this engine", scope="asset", details={"suffix": source_path.suffix.lower()})
         count = _page_count(source_path, source_kind)
+        if count <= 0:
+            raise EngineError("CORRUPT_ASSET", "material source contains no readable pages", scope="asset")
         requested_pages = list(pages_raw) if pages_raw else list(range(count))
         if any(page >= count for page in requested_pages):
             raise EngineError("INVALID_ARGUMENT", "requested page is outside source range", scope="page", details={"page_count": str(count)})
@@ -248,6 +257,9 @@ class MaterialEngine:
         cancel_event = Event()
         with self._lock:
             self._cancel_events[task_id] = cancel_event
+            if task_id in self._pending_cancels:
+                cancel_event.set()
+                self._pending_cancels.discard(task_id)
         drafts: List[PageDraft] = []
         if existing_manifest is not None:
             for index in requested_pages:

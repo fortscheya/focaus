@@ -51,6 +51,37 @@ def _array_numbers(value: bytes, key: bytes) -> Optional[List[float]]:
     return [float(item) for item in _NUMBER_RE.findall(match.group(1))]
 
 
+def _inherited_array(objects: Dict[int, bytes], page_number: int, key: bytes) -> Optional[List[float]]:
+    """Resolve MediaBox-like values inherited from the Pages tree."""
+    visited = set()
+    current = page_number
+    while current in objects and current not in visited:
+        visited.add(current)
+        value = _array_numbers(objects[current], key)
+        if value is not None:
+            return value
+        parents = _references(re.search(rb"/Parent\s*(.*?)(?:/\w+\s|>>|$)", objects[current], re.S).group(1)) if re.search(rb"/Parent\s*(.*?)(?:/\w+\s|>>|$)", objects[current], re.S) else []
+        if not parents:
+            break
+        current = parents[0]
+    return None
+
+
+def _inherited_scalar(objects: Dict[int, bytes], page_number: int, key: bytes) -> Optional[float]:
+    visited = set()
+    current = page_number
+    while current in objects and current not in visited:
+        visited.add(current)
+        match = re.search(re.escape(key) + rb"\s+([-+]?\d+(?:\.\d+)?)", objects[current])
+        if match:
+            return float(match.group(1))
+        parents = _references(re.search(rb"/Parent\s*(.*?)(?:/\w+\s|>>|$)", objects[current], re.S).group(1)) if re.search(rb"/Parent\s*(.*?)(?:/\w+\s|>>|$)", objects[current], re.S) else []
+        if not parents:
+            break
+        current = parents[0]
+    return None
+
+
 def _decode_pdf_string(value: bytes) -> str:
     if value.startswith(b"<") and value.endswith(b">"):
         raw = re.sub(rb"\s+", b"", value[1:-1])
@@ -371,11 +402,11 @@ def _page_draft(
     profile: str,
 ) -> PageDraft:
     body = objects[page_object_number]
-    media_box = _array_numbers(body, b"/MediaBox") or [0.0, 0.0, 612.0, 792.0]
+    media_box = _inherited_array(objects, page_object_number, b"/MediaBox") or [0.0, 0.0, 612.0, 792.0]
     width = max(1.0, media_box[2] - media_box[0]) if len(media_box) >= 4 else 612.0
     height = max(1.0, media_box[3] - media_box[1]) if len(media_box) >= 4 else 792.0
-    rotation_values = _array_numbers(body, b"/Rotate") or [0.0]
-    rotation = int(rotation_values[0]) % 360
+    rotation_value = _inherited_scalar(objects, page_object_number, b"/Rotate") or 0.0
+    rotation = int(rotation_value) % 360
     if rotation not in (0, 90, 180, 270):
         rotation = 0
     if rotation in (90, 270):

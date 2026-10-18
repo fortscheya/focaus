@@ -8,6 +8,7 @@ import sys
 import threading
 from typing import Any
 
+from .common import is_uuid
 from .errors import EngineError
 from .protocol import EngineProtocol
 
@@ -84,7 +85,9 @@ def main() -> int:
             continue
         name = request.get("name")
         if name in ("convert", "resume"):
-            if active_task is not None:
+            if not is_uuid(request.get("task_id")):
+                write(protocol.error_response(request, EngineError("INVALID_ARGUMENT", "task_id must be a UUID", scope="command")))
+            elif active_task is not None:
                 write(protocol.error_response(request, EngineError("CONFLICT", "one conversion task is already running", retryable=True, scope="task")))
             else:
                 start_worker(request)

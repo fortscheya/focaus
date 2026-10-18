@@ -383,13 +383,16 @@ def _table_from_graphic(
 def _cache_values(element: Optional[ET.Element]) -> List[Tuple[int, str]]:
     if element is None:
         return []
-    cache = _first(element, "numCache") or _first(element, "strCache")
+    cache = _first(element, "numCache")
+    if cache is None:
+        cache = _first(element, "strCache")
     if cache is None:
         return []
     values = []
     for point in _children(cache, "pt"):
         index = int(_attr(point, "idx") or len(values))
-        value = _text_content(point)
+        value_node = _first(point, "v")
+        value = (value_node.text or "").strip() if value_node is not None and value_node.text else _text_content(point)
         values.append((index, value))
     return sorted(values)
 
