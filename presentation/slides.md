@@ -1,6 +1,6 @@
 ---
 theme: default
-title: Focaus Roadshow
+title: Focaus · 高密度课堂与讲座下的实时认知对齐引擎
 aspectRatio: 16/9
 canvasWidth: 1280
 transition: fade
@@ -11,31 +11,46 @@ fonts:
   provider: none
 ---
 
-<div class="frame-cover">
-  <p class="frame-eyebrow">FOCAUS · FRAME INTERACTIVE PRESENTATION</p>
-  <h1>路演演示工具已就绪</h1>
-  <p class="frame-subtitle">等待剧本后，将在这里编排完整叙事、交互页面和演示路径。</p>
-</div>
+<FocausCover />
+
+<!-- 5 分钟路演：先让评委看到问题，再用一次 Focaus 操作把他们带进产品能力。 -->
 
 ---
-class: frame-play
+class: frame-night
 ---
 
-# 工具链烟雾页
+<LivePitchDemo />
 
-<ToolchainSmoke />
+<!-- 演示动作：先讲“没有进度条的直播”，再点击 Focaus。 -->
 
 ---
-class: frame-clay
+class: frame-canvas
 ---
 
-# 下一步
+<ListenAccurate />
 
-<div class="frame-next-step">
-  <p>收到剧本后，先拆成故事板，再按每页核心观点、视觉、交互和演示动作实现。</p>
-  <div class="frame-next-step-grid">
-    <div><strong>HTML</strong><span>正式演示媒介</span></div>
-    <div><strong>PDF</strong><span>静态备份</span></div>
-    <div><strong>PPTX</strong><span>兼容备份</span></div>
-  </div>
-</div>
+<!-- 演示动作：点击红线“步幅为二”，再点击“一键替换正文”。 -->
+
+---
+class: frame-canvas
+---
+
+<BilingualNoteMixer />
+
+<!-- 演示动作：调整 Level，再点击“一键添加至笔记”，显示自动生成的图表。 -->
+
+---
+class: frame-canvas
+---
+
+<TraceabilityFormula />
+
+<!-- 演示动作：点击原始转写，再分别点击两条公式里的 ε。 -->
+
+---
+class: frame-night
+---
+
+<ClosingCards />
+
+<!-- 终局：三张卡片展示原始转写、二次转写和实时笔记。 -->

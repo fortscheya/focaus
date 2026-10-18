@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { use } from 'echarts/core'
-import { GridComponent, TooltipComponent } from 'echarts/components'
+import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/components'
 import { LineChart } from 'echarts/charts'
 import { CanvasRenderer } from 'echarts/renderers'
 import VChart from 'vue-echarts'
 
-use([GridComponent, TooltipComponent, LineChart, CanvasRenderer])
+use([GridComponent, LegendComponent, TooltipComponent, LineChart, CanvasRenderer])
 
-const props = withDefaults(defineProps<{ mode?: 'canvas' | 'nocturne' | 'play' | 'clay' }>(), {
+const props = withDefaults(defineProps<{ mode?: 'canvas' | 'nocturne' | 'play' | 'clay'; option?: Record<string, unknown> }>(), {
   mode: 'canvas',
 })
 
@@ -26,8 +26,9 @@ function handleResize() {
 }
 
 const chartOptions = computed(() => ({
+  ...(props.option ?? {}),
   animationDuration: 450,
-  color: [chartColor.value],
+  color: (props.option?.color as string[] | undefined) ?? [chartColor.value, '#16867C'],
   grid: { left: 36, right: 18, top: 18, bottom: 28, containLabel: true },
   tooltip: { trigger: 'axis' },
   xAxis: {
@@ -44,7 +45,7 @@ const chartOptions = computed(() => ({
     splitLine: { lineStyle: { color: 'var(--frame-border)' } },
     axisLabel: { color: 'var(--frame-muted)', fontSize: 14 },
   },
-  series: [{
+  series: props.option?.series ?? [{
     type: 'line',
     smooth: false,
     data: [24, 48, 72, 88],
