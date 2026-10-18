@@ -4,18 +4,37 @@ mod generated;
 pub use generated::*;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeMap, future::Future, pin::Pin, sync::OnceLock};
+use std::{collections::BTreeMap, future::Future, pin::Pin, sync::{Arc, Mutex, OnceLock}};
 pub const CONTRACT_VERSION: &str = "2.0.0";
 pub const MATERIAL_FORMAT: &str = "focaus.material/2.0.0";
 pub const VISUALIZATION_PROTOCOL: &str = "focaus.visualization/1.0.0";
 pub const SCHEMA_TEXT: &str = include_str!("../../../schemas/contracts.schema.json");
 pub fn schema() -> &'static Value { static SCHEMA: OnceLock<Value> = OnceLock::new(); SCHEMA.get_or_init(|| serde_json::from_str(SCHEMA_TEXT).expect("bundled contract schema")) }
 pub fn error(code: ErrorCode, message: &str) -> SafeError { SafeError { code, retryable:false, scope:SafeErrorScope::Command, message:message.into(), details:None } }
+type CachedValidator = Arc<OnceLock<Result<jsonschema::Validator, SafeError>>>;
+fn compiled_validator(kind: &str) -> Result<CachedValidator, SafeError> {
+    // Only bundled definitions may enter the cache. Untrusted type names cannot
+    // grow it, and each definition compiles at most once across threads.
+    if schema()["$defs"].get(kind).is_none() {
+        return Err(error(ErrorCode::InvalidResult, "Unknown contract type"));
+    }
+    static CACHE: OnceLock<Mutex<BTreeMap<String, CachedValidator>>> = OnceLock::new();
+    let mut cache = CACHE.get_or_init(|| Mutex::new(BTreeMap::new())).lock()
+        .map_err(|_| error(ErrorCode::InvalidResult, "Contract cache unavailable"))?;
+    Ok(Arc::clone(cache.entry(kind.into()).or_insert_with(|| Arc::new(OnceLock::new()))))
+}
 pub fn validate(kind: &str, value: &Value) -> Result<(), SafeError> {
-    if schema()["$defs"].get(kind).is_none() { return Err(error(ErrorCode::InvalidResult,"Unknown contract type")); }
-    let mut root=schema().clone(); root["$ref"]=json!(format!("#/$defs/{kind}"));
-    let validator=jsonschema::options().should_validate_formats(true).build(&root).map_err(|_| error(ErrorCode::InvalidResult,"Invalid bundled schema"))?;
-    if !validator.is_valid(value) { return Err(error(ErrorCode::InvalidResult,"Contract schema mismatch")); }
+    let entry = compiled_validator(kind)?;
+    let compiled = entry.get_or_init(|| {
+        let mut root = schema().clone();
+        root["$ref"] = json!(format!("#/$defs/{kind}"));
+        jsonschema::options().should_validate_formats(true).build(&root)
+            .map_err(|_| error(ErrorCode::InvalidResult, "Invalid bundled schema"))
+    });
+    let validator = compiled.as_ref().map_err(Clone::clone)?;
+    if !validator.is_valid(value) {
+        return Err(error(ErrorCode::InvalidResult, "Contract schema mismatch"));
+    }
     Ok(())
 }
 /// RFC 8785 canonical JSON; failures reject non-canonicalizable input.

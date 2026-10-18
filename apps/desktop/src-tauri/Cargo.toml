@@ -37,3 +37,7 @@ required-features = ["native-shell"]
 [[test]]
 name = "wire_contracts"
 path = "../../../tests/integration/wire_contracts.rs"
+
+[[test]]
+name = "native_flow"
+path = "../../../tests/integration/native_flow.rs"

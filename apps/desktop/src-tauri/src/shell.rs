@@ -17,7 +17,7 @@ fn focaus_bootstrap(window: tauri::WebviewWindow, state: tauri::State<'_, Runtim
     let mut ids = state.window_ids.lock().map_err(|_| internal_error())?;
     let id = ids.entry(window.label().to_owned()).or_insert_with(|| uuid::Uuid::new_v4().to_string()).clone();
     // Labels and IDs are issued by the native process. Remote navigation is disallowed.
-    let scope: Scope = serde_json::from_value(serde_json::json!({"kind":"global", "id":null})).map_err(|_| internal_error())?;
+    let scope: Scope = serde_json::from_value(serde_json::json!({"kind":"global"})).map_err(|_| internal_error())?;
     state.host.bind_window(window.label(), &id, vec![scope])?;
     Ok(Bootstrap { window_id: id, contract_version: CONTRACT_VERSION })
 }
