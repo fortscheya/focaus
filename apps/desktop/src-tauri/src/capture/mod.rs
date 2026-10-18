@@ -31,6 +31,7 @@ struct Producer {
     frame: u64,
     channels: usize,
     lost: Arc<AtomicU64>,
+    total: Arc<AtomicU64>,
 }
 impl Producer {
     fn feed<T: Copy>(&mut self, data: &[T], convert: impl Fn(T) -> f32) {
@@ -42,6 +43,7 @@ impl Producer {
             }
             let first = self.frame;
             self.frame += frames as u64;
+            self.total.store(self.frame, Ordering::Release);
             match self.free.try_recv() {
                 Ok(mut buffer) => {
                     buffer.len = frames * self.channels;
@@ -90,6 +92,31 @@ impl RecordingCoordinator {
             active: Mutex::new(None),
             playback: AtomicBool::new(false),
         }
+    }
+    pub(crate) fn clear_finished(&self) -> Result<()> {
+        let mut guard = self
+            .active
+            .lock()
+            .map_err(|_| error(ErrorCode::InvalidResult, "Capture coordinator unavailable"))?;
+        let finished = guard
+            .as_ref()
+            .and_then(|a| a.run.as_ref())
+            .is_some_and(|run| run.join.is_finished());
+        if finished {
+            if let Some(mut active) = guard.take() {
+                if let Some(run) = active.run.take() {
+                    let _ = run.join.join();
+                }
+                let state = self.store.head(&active.recording_id)?["state"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_owned();
+                if ["starting", "recording", "paused", "stopping"].contains(&state.as_str()) {
+                    set_state(&self.store, &active.recording_id, "interrupted")?;
+                }
+            }
+        }
+        Ok(())
     }
     pub fn reserve(
         t: &Transaction<'_>,
@@ -208,16 +235,9 @@ impl RecordingCoordinator {
             }
         }
         if let Some(end) = end {
-            let durable = self.store.read(|c| {
-                c.query_row(
-                    "SELECT durable_watermark_ms FROM recording_sessions WHERE recording_id=?1",
-                    [recording],
-                    |r| r.get::<_, u64>(0),
-                )
-                .map_err(sql_error)
-            })?;
-            if end > durable {
-                audio::record_gap(&self.store, recording, durable, end, false)?;
+            let covered = coverage_end(&self.store, recording)?;
+            if end > covered {
+                audio::record_gap(&self.store, recording, covered, end, false)?;
             }
         }
         Ok(())
@@ -233,6 +253,18 @@ impl RecordingCoordinator {
                 "Another recording is active",
             ));
         }
+        let mut prior_failure = false;
+        if let Some(active) = guard.as_mut() {
+            if active
+                .run
+                .as_ref()
+                .is_some_and(|run| run.join.is_finished())
+            {
+                if let Some(run) = active.run.take() {
+                    prior_failure = !matches!(run.join.join(), Ok(Ok(_)));
+                }
+            }
+        }
         if guard.as_ref().is_some_and(|a| a.run.is_some()) {
             return Ok(());
         }
@@ -240,20 +272,26 @@ impl RecordingCoordinator {
         if head["state"] != "starting" {
             return Ok(());
         }
-        let durable = self.store.read(|c| {
-            c.query_row(
-                "SELECT durable_watermark_ms FROM recording_sessions WHERE recording_id=?1",
-                [recording],
-                |r| r.get::<_, u64>(0),
-            )
-            .map_err(sql_error)
-        })?;
-        let restarting = guard.is_none();
+        let covered = coverage_end(&self.store, recording)?;
+        let restarting = guard.is_none() || prior_failure;
+        let gap_start = guard
+            .as_ref()
+            .and_then(|a| a.pause_at)
+            .unwrap_or(covered)
+            .max(covered);
         let offset = guard
             .as_ref()
             .map(|a| a.base_ms + a.origin.elapsed().as_millis() as u64)
-            .unwrap_or(durable);
-        audio::record_gap(&self.store, recording, durable, offset, restarting)?;
+            .unwrap_or(covered)
+            .max(gap_start);
+        if let Err(e) = audio::record_gap(&self.store, recording, gap_start, offset, restarting) {
+            let _ = set_state(
+                &self.store,
+                recording,
+                if restarting { "interrupted" } else { "paused" },
+            );
+            return Err(e);
+        }
         self.playback.store(false, Ordering::Release);
         match spawn_microphone(self.store.clone(), recording.into(), None, offset) {
             Ok(run) => {
@@ -323,16 +361,9 @@ impl RecordingCoordinator {
         if terminal {
             *guard = None;
         }
-        let durable = self.store.read(|c| {
-            c.query_row(
-                "SELECT durable_watermark_ms FROM recording_sessions WHERE recording_id=?1",
-                [recording],
-                |r| r.get::<_, u64>(0),
-            )
-            .map_err(sql_error)
-        })?;
-        if end > durable {
-            audio::record_gap(&self.store, recording, durable, end, false)?;
+        let covered = coverage_end(&self.store, recording)?;
+        if end > covered {
+            audio::record_gap(&self.store, recording, covered, end, false)?;
         }
         set_state(
             &self.store,
@@ -359,17 +390,18 @@ impl RecordingCoordinator {
                 "Another recording is active",
             ));
         }
+        let covered = coverage_end(&self.store, recording)?;
         let offset = guard
             .as_ref()
             .map(|a| a.base_ms + a.origin.elapsed().as_millis() as u64)
-            .unwrap_or(head["durable_watermark_ms"].as_u64().unwrap_or(0));
-        let durable = head["durable_watermark_ms"].as_u64().unwrap_or(0);
+            .unwrap_or(covered)
+            .max(covered);
         // A restart cannot reconstruct the elapsed off-process time. Keep an
         // explicit uncertain boundary rather than inventing recorded silence.
         audio::record_gap(
             &self.store,
             recording,
-            durable,
+            covered,
             offset,
             state == "interrupted",
         )?;
@@ -423,6 +455,18 @@ impl RecordingCoordinator {
         }
         self.store.flush()
     }
+}
+/// Persisted gaps cover timeline without advancing the original-byte watermark.
+/// Control operations extend coverage from this boundary, avoiding duplicate gaps.
+fn coverage_end(store: &Store, recording: &str) -> Result<u64> {
+    store.read(|c| {
+        c.query_row(
+            "SELECT MAX(durable_watermark_ms,COALESCE((SELECT MAX(end_ms) FROM audio_spans WHERE recording_id=?1),0)) FROM recording_sessions WHERE recording_id=?1",
+            [recording],
+            |r| r.get(0),
+        )
+        .map_err(sql_error)
+    })
 }
 pub(crate) fn set_state(store: &Store, recording: &str, state: &str) -> Result<Value> {
     store.write(|t| state_transaction(t, recording, state, None))
@@ -511,6 +555,7 @@ fn spawn_microphone(
                         .unwrap();
                 }
                 let lost = Arc::new(AtomicU64::new(0));
+                let total = Arc::new(AtomicU64::new(0));
                 let broken = Arc::new(AtomicBool::new(false));
                 let mut producer = Producer {
                     free: free_rx,
@@ -518,11 +563,18 @@ fn spawn_microphone(
                     frame: 0,
                     channels: channels as usize,
                     lost: lost.clone(),
+                    total: total.clone(),
                 };
                 let err = broken.clone();
                 let on_error = move |_: cpal::StreamError| {
                     err.store(true, Ordering::Release);
                 };
+                if stop_worker.load(Ordering::Acquire) {
+                    return Err(error(
+                        ErrorCode::Cancelled,
+                        "Microphone start was cancelled",
+                    ));
+                }
                 let stream = match format {
                     cpal::SampleFormat::F32 => dev.build_input_stream(
                         &config,
@@ -559,18 +611,28 @@ fn spawn_microphone(
                         "Microphone could not be opened",
                     )
                 })?;
+                if stop_worker.load(Ordering::Acquire) {
+                    return Err(error(
+                        ErrorCode::Cancelled,
+                        "Microphone start was cancelled",
+                    ));
+                }
                 stream
                     .play()
                     .map_err(|_| error(ErrorCode::DeviceLost, "Microphone could not start"))?;
-                Ok((stream, ready_rx, free_tx, rate, channels, lost, broken))
+                Ok((
+                    stream, ready_rx, free_tx, rate, channels, lost, broken, total,
+                ))
             })();
             match setup {
                 Err(e) => {
                     let _ = started_tx.send(Err(e.clone()));
-                    let _ = set_state(&store, &recording, "failed");
+                    if !stop_worker.load(Ordering::Acquire) {
+                        let _ = set_state(&store, &recording, "failed");
+                    }
                     Err(e)
                 }
-                Ok((stream, ready, free, rate, channels, lost, broken)) => {
+                Ok((stream, ready, free, rate, channels, lost, broken, total)) => {
                     let _ = started_tx.send(Ok(()));
                     let result = write_loop(
                         &store,
@@ -582,6 +644,7 @@ fn spawn_microphone(
                         &free,
                         &stop_worker,
                         &broken,
+                        &total,
                         stream,
                     );
                     if result.is_err() {
@@ -607,7 +670,7 @@ fn spawn_microphone(
         }
     }
 }
-fn write_loop(
+fn write_loop<S>(
     store: &Store,
     recording: &str,
     offset: u64,
@@ -617,79 +680,105 @@ fn write_loop(
     free: &SyncSender<Buffer>,
     stop: &AtomicBool,
     broken: &AtomicBool,
-    stream: cpal::Stream,
+    total: &AtomicU64,
+    stream: S,
 ) -> Result<RunSummary> {
+    let registrar = audio::registrar::MetadataRegistrar::new(store.clone(), recording.into(), 128)?;
     let mut stream = Some(stream);
-    let mut writer: Option<SegmentWriter> = None;
-    let mut expected_frame = 0;
-    let mut summary = RunSummary::default();
-    let mut first = true;
-    loop {
-        if stop.load(Ordering::Acquire) || broken.load(Ordering::Acquire) {
-            stream.take();
-        }
-        let packet = if stream.is_none() {
-            match ready.try_recv() {
-                Ok(b) => Some(b),
-                Err(TryRecvError::Empty | TryRecvError::Disconnected) => None,
+    let persisted = (|| -> Result<RunSummary> {
+        let mut writer: Option<SegmentWriter> = None;
+        let mut expected_frame = 0;
+        let mut summary = RunSummary {
+            end_ms: offset,
+            ..RunSummary::default()
+        };
+        let mut first = true;
+        loop {
+            if stop.load(Ordering::Acquire) || broken.load(Ordering::Acquire) || registrar.failed()
+            {
+                stream.take();
             }
-        } else {
-            match ready.recv_timeout(Duration::from_millis(50)) {
-                Ok(b) => Some(b),
-                Err(mpsc::RecvTimeoutError::Timeout) => continue,
-                Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    return Err(error(ErrorCode::DeviceLost, "Microphone callback ended"));
+            let packet = if stream.is_none() {
+                match ready.try_recv() {
+                    Ok(b) => Some(b),
+                    Err(TryRecvError::Empty | TryRecvError::Disconnected) => None,
                 }
+            } else {
+                match ready.recv_timeout(Duration::from_millis(50)) {
+                    Ok(b) => Some(b),
+                    Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                    Err(mpsc::RecvTimeoutError::Disconnected) => {
+                        return Err(error(ErrorCode::DeviceLost, "Microphone callback ended"));
+                    }
+                }
+            };
+            let Some(buffer) = packet else {
+                break;
+            };
+            if first {
+                registrar.started()?;
+                first = false;
             }
-        };
-        let Some(buffer) = packet else {
-            break;
-        };
-        if first {
-            set_state(store, recording, "recording")?;
-            first = false;
-        }
-        if buffer.first_frame != expected_frame {
-            if let Some(w) = writer.take() {
-                w.seal(store, false)?;
+            if buffer.first_frame != expected_frame {
+                if let Some(w) = writer.take() {
+                    registrar.segment(w.seal_bytes(store.root())?)?;
+                    summary.segments += 1;
+                }
+                registrar.gap(audio::PendingGap::create(
+                    store.root(),
+                    recording,
+                    offset + audio::frame_ms(expected_frame, rate)?,
+                    offset + audio::frame_ms(buffer.first_frame, rate)?,
+                    false,
+                )?)?;
+            }
+            if writer.is_none() {
+                writer = Some(SegmentWriter::create(
+                    store.root(),
+                    SegmentMeta::new(
+                        recording,
+                        rate,
+                        channels,
+                        offset + audio::frame_ms(buffer.first_frame, rate)?,
+                        buffer.first_frame,
+                    )?,
+                )?);
+            }
+            let w = writer.as_mut().unwrap();
+            w.append(&buffer.samples[..buffer.len])?;
+            let count = buffer.len as u64 / channels as u64;
+            expected_frame = buffer.first_frame + count;
+            summary.frames += count;
+            summary.end_ms = offset + audio::frame_ms(expected_frame, rate)?;
+            let _ = free.try_send(buffer);
+            if w.frames() >= rate as u64 {
+                registrar.segment(writer.take().unwrap().seal_bytes(store.root())?)?;
                 summary.segments += 1;
             }
-            audio::record_gap(
-                store,
-                recording,
-                offset + audio::frame_ms(expected_frame, rate)?,
-                offset + audio::frame_ms(buffer.first_frame, rate)?,
-                false,
-            )?;
         }
-        if writer.is_none() {
-            writer = Some(SegmentWriter::create(
-                store.root(),
-                SegmentMeta::new(
-                    recording,
-                    rate,
-                    channels,
-                    offset + audio::frame_ms(buffer.first_frame, rate)?,
-                    buffer.first_frame,
-                )?,
-            )?);
-        }
-        let w = writer.as_mut().unwrap();
-        w.append(&buffer.samples[..buffer.len])?;
-        let count = buffer.len as u64 / channels as u64;
-        expected_frame = buffer.first_frame + count;
-        summary.frames += count;
-        summary.end_ms = offset + audio::frame_ms(expected_frame, rate)?;
-        let _ = free.try_send(buffer);
-        if w.frames() >= rate as u64 {
-            writer.take().unwrap().seal(store, false)?;
+        if let Some(w) = writer {
+            registrar.segment(w.seal_bytes(store.root())?)?;
             summary.segments += 1;
         }
-    }
-    if let Some(w) = writer {
-        w.seal(store, false)?;
-        summary.segments += 1;
-    }
+        let final_frame = total.load(Ordering::Acquire);
+        if final_frame > expected_frame {
+            registrar.gap(audio::PendingGap::create(
+                store.root(),
+                recording,
+                offset + audio::frame_ms(expected_frame, rate)?,
+                offset + audio::frame_ms(final_frame, rate)?,
+                false,
+            )?)?;
+            summary.end_ms = offset + audio::frame_ms(final_frame, rate)?;
+        }
+        Ok(summary)
+    })();
+    // Even an I/O error must close the device and drop any partial writer before
+    // joining metadata work. No detached registrar may outlive the capture run.
+    drop(stream);
+    let registered = registrar.finish();
+    let summary = persisted?;
+    registered?;
     if broken.load(Ordering::Acquire) {
         return Err(error(
             ErrorCode::DeviceLost,
@@ -697,4 +786,314 @@ fn write_loop(
         ));
     }
     Ok(summary)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    struct TestRecording {
+        store: Store,
+        recording: String,
+        root: std::path::PathBuf,
+    }
+    impl TestRecording {
+        fn new() -> Self {
+            let root = std::env::temp_dir().join(storage::id());
+            let store =
+                Store::open(&root, include_str!("../../migrations/0001_initial.sql")).unwrap();
+            let head = store
+                .write(|t| {
+                    RecordingCoordinator::reserve(
+                        t,
+                        &RecordingStartInput {
+                            lesson_id: None,
+                            device_id: None,
+                        },
+                        None,
+                    )
+                })
+                .unwrap();
+            Self {
+                store,
+                recording: head["recording_id"].as_str().unwrap().into(),
+                root,
+            }
+        }
+        fn hold_database(&self) -> (SyncSender<()>, JoinHandle<Result<()>>) {
+            let (locked_tx, locked_rx) = mpsc::sync_channel(1);
+            let (release_tx, release_rx) = mpsc::sync_channel(1);
+            let store = self.store.clone();
+            let join = thread::spawn(move || {
+                store.write(|_| {
+                    locked_tx.send(()).unwrap();
+                    let _ = release_rx.recv_timeout(Duration::from_secs(10));
+                    Ok(())
+                })
+            });
+            locked_rx.recv().unwrap();
+            (release_tx, join)
+        }
+    }
+    impl Drop for TestRecording {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+    // Exercises the production byte writer without opening an audio device.
+    struct StreamClosed(SyncSender<()>);
+    impl Drop for StreamClosed {
+        fn drop(&mut self) {
+            let _ = self.0.send(());
+        }
+    }
+    #[test]
+    fn dropped_tail_and_control_gaps_are_adjacent_without_advancing_original_watermark() {
+        let db = TestRecording::new();
+        let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+        let (free_tx, _free_rx) = mpsc::sync_channel(1);
+        ready_tx
+            .send(Buffer {
+                samples: Box::new([0.; BUFFER_SAMPLES]),
+                len: BUFFER_SAMPLES,
+                first_frame: 0,
+            })
+            .unwrap();
+        let summary = write_loop(
+            &db.store,
+            &db.recording,
+            0,
+            48000,
+            1,
+            &ready_rx,
+            &free_tx,
+            &AtomicBool::new(true),
+            &AtomicBool::new(false),
+            &AtomicU64::new(2 * BUFFER_SAMPLES as u64),
+            (),
+        )
+        .unwrap();
+        assert_eq!(summary.frames, BUFFER_SAMPLES as u64);
+        assert_eq!(summary.end_ms, 170);
+        assert_eq!(coverage_end(&db.store, &db.recording).unwrap(), 170);
+        let coordinator = RecordingCoordinator::new(db.store.clone());
+        *coordinator.active.lock().unwrap() = Some(Active {
+            recording_id: db.recording.clone(),
+            origin: Instant::now(),
+            base_ms: 200,
+            run: Some(Running {
+                stop: Arc::new(AtomicBool::new(false)),
+                join: thread::spawn(move || Ok(summary)),
+            }),
+            pause_at: None,
+        });
+        coordinator.quiesce(&db.recording, false).unwrap();
+        set_state(&db.store, &db.recording, "paused").unwrap();
+        coordinator.stop(&db.recording).unwrap();
+        let gaps = db.store.read(|c| {
+            let mut query = c.prepare("SELECT start_ms,end_ms FROM audio_spans WHERE recording_id=?1 AND coverage_status='capture_gap' ORDER BY start_ms").map_err(sql_error)?;
+            let rows = query.query_map([&db.recording], |r| Ok((r.get::<_,u64>(0)?,r.get::<_,u64>(1)?))).map_err(sql_error)?;
+            rows.collect::<std::result::Result<Vec<_>,_>>().map_err(sql_error)
+        }).unwrap();
+        assert!(gaps.len() >= 2);
+        assert_eq!(gaps[0], (85, 170));
+        assert_eq!(gaps[1].0, 170);
+        assert!(gaps[1].1 >= 200);
+        for pair in gaps.windows(2) {
+            assert_eq!(pair[0].1, pair[1].0, "duplicate or missing gap coverage");
+        }
+        let head = db.store.head(&db.recording).unwrap();
+        assert_eq!(head["durable_watermark_ms"], 85);
+        assert_eq!(head["state"], "stopped");
+    }
+    #[test]
+    fn sqlite_contention_cannot_block_original_write_loop_and_stop_drains_metadata() {
+        let db = TestRecording::new();
+        let (release, lock) = db.hold_database();
+        let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+        let (free_tx, free_rx) = mpsc::sync_channel(1);
+        let (closed_tx, closed_rx) = mpsc::sync_channel(1);
+        let stop = Arc::new(AtomicBool::new(false));
+        let total = Arc::new(AtomicU64::new(0));
+        let writer_stop = stop.clone();
+        let writer_total = total.clone();
+        let store = db.store.clone();
+        let recording = db.recording.clone();
+        let writer = thread::spawn(move || {
+            write_loop(
+                &store,
+                &recording,
+                0,
+                48000,
+                1,
+                &ready_rx,
+                &free_tx,
+                &writer_stop,
+                &AtomicBool::new(false),
+                &writer_total,
+                StreamClosed(closed_tx),
+            )
+        });
+        let mut buffer = Buffer {
+            samples: Box::new([0.25; BUFFER_SAMPLES]),
+            len: BUFFER_SAMPLES,
+            first_frame: 0,
+        };
+        for packet in 0..36 {
+            buffer.first_frame = packet * BUFFER_SAMPLES as u64;
+            total.store(
+                buffer.first_frame + BUFFER_SAMPLES as u64,
+                Ordering::Release,
+            );
+            ready_tx.send(buffer).unwrap();
+            buffer = free_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        }
+        stop.store(true, Ordering::Release);
+        let closed = closed_rx.recv_timeout(Duration::from_secs(2));
+        let sealed = std::fs::read_dir(db.root.join("resources"))
+            .unwrap()
+            .count();
+        let waiting_for_metadata = !writer.is_finished();
+        release.send(()).unwrap();
+        lock.join().unwrap().unwrap();
+        let summary = writer.join().unwrap().unwrap();
+        assert!(closed.is_ok(), "device was held open by SQLite");
+        assert_eq!(sealed, 3, "original segments waited for SQLite");
+        assert!(waiting_for_metadata, "stop skipped pending metadata");
+        assert_eq!(summary.frames, 36 * BUFFER_SAMPLES as u64);
+        assert_eq!(summary.segments, 3);
+        assert_eq!(summary.end_ms, 3072);
+        assert_eq!(
+            db.store.head(&db.recording).unwrap()["durable_watermark_ms"],
+            3072
+        );
+        assert_eq!(
+            std::fs::read_dir(db.root.join("capture").join(&db.recording))
+                .unwrap()
+                .count(),
+            0
+        );
+    }
+    #[test]
+    fn original_writer_error_closes_device_and_joins_metadata_before_returning() {
+        let db = TestRecording::new();
+        // An unavailable capture directory forces the byte writer's error path.
+        std::fs::write(db.root.join("capture").join(&db.recording), b"occupied").unwrap();
+        let (release, lock) = db.hold_database();
+        let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+        let (free_tx, _free_rx) = mpsc::sync_channel(1);
+        let (closed_tx, closed_rx) = mpsc::sync_channel(1);
+        ready_tx
+            .send(Buffer {
+                samples: Box::new([0.; BUFFER_SAMPLES]),
+                len: BUFFER_SAMPLES,
+                first_frame: 0,
+            })
+            .unwrap();
+        let store = db.store.clone();
+        let recording = db.recording.clone();
+        let writer = thread::spawn(move || {
+            write_loop(
+                &store,
+                &recording,
+                0,
+                48000,
+                1,
+                &ready_rx,
+                &free_tx,
+                &AtomicBool::new(false),
+                &AtomicBool::new(false),
+                &AtomicU64::new(BUFFER_SAMPLES as u64),
+                StreamClosed(closed_tx),
+            )
+        });
+        let closed = closed_rx.recv_timeout(Duration::from_secs(2));
+        let waiting_for_metadata = !writer.is_finished();
+        release.send(()).unwrap();
+        lock.join().unwrap().unwrap();
+        assert!(closed.is_ok(), "failed writer did not close its device");
+        assert!(waiting_for_metadata, "failed writer detached its registrar");
+        assert!(writer.join().unwrap().is_err());
+    }
+    #[test]
+    fn full_callback_pool_accounts_for_tail_frames_without_blocking() {
+        let (free_tx, free_rx) = mpsc::sync_channel(1);
+        let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+        free_tx
+            .send(Buffer {
+                samples: Box::new([0.; BUFFER_SAMPLES]),
+                len: 0,
+                first_frame: 0,
+            })
+            .unwrap();
+        let lost = Arc::new(AtomicU64::new(0));
+        let total = Arc::new(AtomicU64::new(0));
+        let mut producer = Producer {
+            free: free_rx,
+            ready: ready_tx,
+            frame: 0,
+            channels: 1,
+            lost: lost.clone(),
+            total: total.clone(),
+        };
+        producer.feed(&[0.; 512], |x| x);
+        producer.feed(&[0.; 512], |x| x);
+        assert_eq!(total.load(Ordering::Acquire), 1024);
+        assert_eq!(lost.load(Ordering::Acquire), 512);
+        let buffer = ready_rx.try_recv().unwrap();
+        assert_eq!(buffer.first_frame, 0);
+        free_tx.send(buffer).unwrap();
+        producer.feed(&[0.; 512], |x| x);
+        assert_eq!(ready_rx.try_recv().unwrap().first_frame, 1024);
+    }
+    #[test]
+    fn completed_failed_capture_releases_arbiter_without_automatic_device_restart() {
+        let root = std::env::temp_dir().join(storage::id());
+        let store = Store::open(&root, include_str!("../../migrations/0001_initial.sql")).unwrap();
+        let recording = store
+            .write(|t| {
+                RecordingCoordinator::reserve(
+                    t,
+                    &RecordingStartInput {
+                        lesson_id: None,
+                        device_id: None,
+                    },
+                    None,
+                )
+            })
+            .unwrap();
+        let recording = recording["recording_id"].as_str().unwrap().to_owned();
+        let coordinator = RecordingCoordinator::new(store.clone());
+        let join = thread::spawn(|| Err(error(ErrorCode::DeviceLost, "synthetic device failure")));
+        while !join.is_finished() {
+            thread::yield_now();
+        }
+        *coordinator.active.lock().unwrap() = Some(Active {
+            recording_id: recording.clone(),
+            origin: Instant::now(),
+            base_ms: 0,
+            run: Some(Running {
+                stop: Arc::new(AtomicBool::new(false)),
+                join,
+            }),
+            pause_at: None,
+        });
+        coordinator.clear_finished().unwrap();
+        assert!(coordinator.active.lock().unwrap().is_none());
+        assert_eq!(store.head(&recording).unwrap()["state"], "interrupted");
+        store
+            .write(|t| {
+                RecordingCoordinator::reserve(
+                    t,
+                    &RecordingStartInput {
+                        lesson_id: None,
+                        device_id: None,
+                    },
+                    None,
+                )
+            })
+            .unwrap();
+        drop(coordinator);
+        drop(store);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

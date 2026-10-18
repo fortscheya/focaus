@@ -33,6 +33,7 @@ pub struct NativeHost {
     pub snapshots: crate::library::snapshots::SnapshotStore,
     pub focaus: crate::library::catchup::FocausCoordinator,
     pub materials: crate::library::materials::MaterialService,
+    pub recovery_report: crate::audio::RecoveryReport,
     pub run_id: String,
     windows: Mutex<BTreeMap<String, WindowBinding>>,
     subscriptions: Mutex<BTreeMap<String, Subscription>>,
@@ -57,7 +58,7 @@ impl NativeHost {
     /// Opening a library restores data/tasks but never opens a microphone.
     pub fn open(root: impl AsRef<Path>, migration: &str) -> Result<Self> {
         let store = Store::open(root, migration)?;
-        let _ = crate::audio::recover(&store)?;
+        let recovery_report = crate::audio::recover(&store)?;
         let tasks = TaskManager::new(store.clone());
         let _ = tasks.recover()?;
         let views = crate::windows::WindowCoordinator::new(store.clone());
@@ -69,6 +70,7 @@ impl NativeHost {
             snapshots: crate::library::snapshots::SnapshotStore::new(store.clone()),
             focaus: crate::library::catchup::FocausCoordinator::new(store.clone()),
             materials: crate::library::materials::MaterialService::new(store.clone()),
+            recovery_report,
             views,
             tasks,
             store,
@@ -323,6 +325,7 @@ impl NativeHost {
                 })
             }
             "recording.start" => {
+                self.recording.clear_finished()?;
                 let input: RecordingStartInput = parse(&command.payload)?;
                 let receipt = self.store.command(&window.id, &command, |t| {
                     RecordingCoordinator::reserve(t, &input, Some(&command.command_id))
@@ -497,7 +500,7 @@ impl NativeHost {
                 for row in indexes.query_map([],|r|Ok((r.get::<_,String>(0)?,r.get::<_,u64>(1)?,r.get::<_,u64>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,String>(5)?,r.get::<_,u64>(6)?,r.get::<_,u64>(7)?))).map_err(sql_error)? {let(id,projection,generation,manifest,dirty,coverage,visibility,last)=row.map_err(sql_error)?;records.get_mut("search_indexes").unwrap().insert(id,json!({"projection_version":projection,"index_generation":generation,"head_manifest_hash":manifest,"dirty_ranges":storage::decode::<Value>(&dirty)?,"coverage":storage::decode::<Value>(&coverage)?,"visibility_epoch":visibility,"last_committed_seq":last}));}
             }
             let recording:Option<String>=c.query_row("SELECT recording_id FROM recording_sessions ORDER BY state IN ('starting','recording','paused','stopping') DESC,rowid DESC LIMIT 1",[],|r|r.get(0)).optional().map_err(sql_error)?;
-            let mut global=BTreeMap::new();global.insert("recording".into(),recording.map(|id|crate::storage::head(c,&id)).transpose()?.unwrap_or(Value::Null));global.insert("visibility_epoch".into(),json!(crate::storage::epoch(c)?));global.insert("windows".into(),json!([]));
+            let mut global=BTreeMap::new();global.insert("recording".into(),recording.map(|id|crate::storage::head(c,&id)).transpose()?.unwrap_or(Value::Null));global.insert("visibility_epoch".into(),json!(crate::storage::epoch(c)?));global.insert("windows".into(),json!([]));global.insert("recovery".into(),storage::value(&self.recovery_report)?);
             Ok(AppSnapshot {contract_version:CONTRACT_VERSION.into(),host_run_id:self.run_id.clone(),snapshot_seq:seq,scopes:input.scopes.clone(),global,records,continuations:Vec::new()})
         })?;
         subscriptions.insert(

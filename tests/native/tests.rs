@@ -1208,3 +1208,176 @@ fn material_sidecar_roundtrip_uses_managed_original_and_host_search() {
         .read(|c| library::check_source(c, &job.input.snapshot.sources[0]))
         .unwrap();
 }
+
+#[test]
+fn original_file_sealing_continues_under_sqlite_lock_and_metadata_queue_overflow() {
+    use std::{sync::mpsc, thread, time::Duration};
+    let db = TestLibrary::new();
+    let recording = reserve(&db.store);
+    let rid = recording["recording_id"].as_str().unwrap().to_owned();
+    let (locked_tx, locked_rx) = mpsc::sync_channel(1);
+    let (release_tx, release_rx) = mpsc::sync_channel(1);
+    let lock_store = db.store.clone();
+    let lock = thread::spawn(move || {
+        lock_store.write(|_| {
+            locked_tx.send(()).unwrap();
+            let _ = release_rx.recv_timeout(Duration::from_secs(3));
+            Ok(())
+        })
+    });
+    locked_rx.recv().unwrap();
+    let (sealed_tx, sealed_rx) = mpsc::sync_channel(1);
+    let writer_store = db.store.clone();
+    let writer_id = rid.clone();
+    let writer = thread::spawn(move || -> storage::Result<()> {
+        let registrar =
+            audio::registrar::MetadataRegistrar::new(writer_store.clone(), writer_id.clone(), 1)?;
+        registrar.started()?;
+        for i in 0..5 {
+            let meta = audio::SegmentMeta::new(&writer_id, 48000, 1, i * 100, i * 4800)?;
+            let relative = meta.relative();
+            let mut file = audio::SegmentWriter::create(writer_store.root(), meta)?;
+            file.append(&[0.25; 4800])?;
+            registrar.segment(file.seal_bytes(writer_store.root())?)?;
+            assert!(writer_store.root().join(relative).is_file());
+        }
+        registrar.gap(audio::PendingGap::create(
+            writer_store.root(),
+            &writer_id,
+            500,
+            600,
+            false,
+        )?)?;
+        sealed_tx.send(()).unwrap();
+        registrar.finish()
+    });
+    // This must arrive while the SQLite writer is still deliberately held.
+    let sealed = sealed_rx.recv_timeout(Duration::from_secs(2));
+    release_tx.send(()).unwrap();
+    lock.join().unwrap().unwrap();
+    assert!(sealed.is_ok(), "original writer waited for SQLite");
+    writer.join().unwrap().unwrap();
+    let counts=db.store.read(|c|c.query_row("SELECT COUNT(*),SUM(coverage_status='capture_gap') FROM audio_spans WHERE recording_id=?1",[&rid],|r|Ok((r.get::<_,u64>(0)?,r.get::<_,u64>(1)?))).map_err(storage::sql_error)).unwrap();
+    assert_eq!(counts, (6, 1));
+    assert_eq!(db.store.head(&rid).unwrap()["durable_watermark_ms"], 500);
+    assert_eq!(db.store.head(&rid).unwrap()["state"], "recording");
+    assert_eq!(
+        std::fs::read_dir(db.path.join("capture").join(&rid))
+            .unwrap()
+            .count(),
+        0
+    );
+}
+
+#[test]
+fn segment_end_uses_global_rational_boundary_without_accumulated_rounding() {
+    let db = TestLibrary::new();
+    let recording = reserve(&db.store);
+    let rid = recording["recording_id"].as_str().unwrap();
+    let mut writer = audio::SegmentWriter::create(
+        &db.path,
+        audio::SegmentMeta::new(rid, 48000, 1, 1000, 48001).unwrap(),
+    )
+    .unwrap();
+    writer.append(&vec![0.; 47999]).unwrap();
+    let span = writer.seal(&db.store, false).unwrap();
+    assert_eq!(span["timeline_range"]["end_ms"], 2000);
+}
+
+#[test]
+fn sealed_original_and_gap_journals_survive_unregistered_restart_and_replay_once() {
+    let db = TestLibrary::new();
+    let recording = reserve(&db.store);
+    let rid = recording["recording_id"].as_str().unwrap();
+    let meta = audio::SegmentMeta::new(rid, 48000, 1, 0, 0).unwrap();
+    let relative = meta.relative();
+    let mut writer = audio::SegmentWriter::create(&db.path, meta).unwrap();
+    writer.append(&[0.25; 4800]).unwrap();
+    drop(writer.seal_bytes(&db.path).unwrap());
+    drop(audio::PendingGap::create(&db.path, rid, 100, 200, false).unwrap());
+    let original_hash = audio::raw_hash(&db.path.join(&relative)).unwrap();
+    let recovered = audio::recover(&db.store).unwrap();
+    assert_eq!(recovered.failed_segments, 0);
+    assert_eq!(recovered.recovered_segments, 1);
+    assert_eq!(recovered.recovered_frames, 4800);
+    assert_eq!(
+        audio::raw_hash(&db.path.join(&relative)).unwrap(),
+        original_hash
+    );
+    let counts = db.store.read(|c| {
+        c.query_row("SELECT COUNT(*),SUM(coverage_status='capture_gap') FROM audio_spans WHERE recording_id=?1", [rid], |r| Ok((r.get::<_,u64>(0)?,r.get::<_,u64>(1)?)))
+            .map_err(storage::sql_error)
+    }).unwrap();
+    assert_eq!(counts, (2, 1));
+    assert_eq!(db.store.head(rid).unwrap()["state"], "interrupted");
+    assert_eq!(db.store.head(rid).unwrap()["durable_watermark_ms"], 100);
+    let seq = db.store.read(storage::sequence).unwrap();
+    let replayed = audio::recover(&db.store).unwrap();
+    assert_eq!(replayed.recovered_segments, 0);
+    assert_eq!(replayed.failed_segments, 0);
+    assert_eq!(db.store.read(storage::sequence).unwrap(), seq);
+    assert_eq!(
+        std::fs::read_dir(db.path.join("capture").join(rid))
+            .unwrap()
+            .count(),
+        0
+    );
+}
+
+#[test]
+fn failed_registrar_preserves_later_original_journals_and_rejects_deleted_recording() {
+    use std::time::{Duration, Instant};
+    let db = TestLibrary::new();
+    let recording = reserve(&db.store);
+    let rid = recording["recording_id"].as_str().unwrap();
+    db.store
+        .write(|t| {
+            t.execute(
+                "UPDATE entities SET lifecycle='deleted' WHERE entity_id=?1",
+                [rid],
+            )
+            .map_err(storage::sql_error)?;
+            Ok(())
+        })
+        .unwrap();
+    let seq = db.store.read(storage::sequence).unwrap();
+    let registrar =
+        audio::registrar::MetadataRegistrar::new(db.store.clone(), rid.into(), 1).unwrap();
+    registrar.started().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !registrar.failed() && Instant::now() < deadline {
+        std::thread::yield_now();
+    }
+    assert!(registrar.failed(), "metadata failure was not observed");
+    let mut writer = audio::SegmentWriter::create(
+        &db.path,
+        audio::SegmentMeta::new(rid, 48000, 1, 0, 0).unwrap(),
+    )
+    .unwrap();
+    writer.append(&[0.25; 4800]).unwrap();
+    registrar
+        .segment(writer.seal_bytes(&db.path).unwrap())
+        .unwrap();
+    registrar
+        .gap(audio::PendingGap::create(&db.path, rid, 100, 200, false).unwrap())
+        .unwrap();
+    assert_eq!(
+        registrar.finish().unwrap_err().code,
+        ErrorCode::SourceDeleted
+    );
+    assert_eq!(
+        std::fs::read_dir(db.path.join("capture").join(rid))
+            .unwrap()
+            .count(),
+        2
+    );
+    assert_eq!(
+        std::fs::read_dir(db.path.join("resources"))
+            .unwrap()
+            .count(),
+        1
+    );
+    assert_eq!(db.store.read(storage::sequence).unwrap(), seq);
+    assert_eq!(audio::recover(&db.store).unwrap().failed_segments, 2);
+    assert_eq!(db.store.read(storage::sequence).unwrap(), seq);
+}
