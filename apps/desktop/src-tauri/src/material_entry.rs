@@ -119,74 +119,79 @@ fn run_local_sidecar_inner(
                 "Local material engine could not start",
             )
         })?;
-    {
-        let stdin = child.stdin.as_mut().ok_or_else(|| {
-            error(
-                focaus_contracts::ErrorCode::ProviderError,
-                "Local material engine input unavailable",
-            )
-        })?;
-        writeln!(
-            stdin,
-            "{}",
-            serde_json::to_string(&handshake).map_err(|_| {
-                error(
-                    focaus_contracts::ErrorCode::InvalidResult,
-                    "Cannot encode material engine handshake",
-                )
-            })?
+    let mut stdin = child.stdin.take().ok_or_else(|| {
+        error(
+            focaus_contracts::ErrorCode::ProviderError,
+            "Local material engine input unavailable",
         )
-        .map_err(|_| {
-            error(
-                focaus_contracts::ErrorCode::ProviderError,
-                "Cannot send material engine handshake",
-            )
-        })?;
-        writeln!(
-            stdin,
-            "{}",
-            serde_json::to_string(&request).map_err(|_| {
-                error(
-                    focaus_contracts::ErrorCode::InvalidResult,
-                    "Cannot encode material engine request",
-                )
-            })?
-        )
-        .map_err(|_| {
-            error(
-                focaus_contracts::ErrorCode::ProviderError,
-                "Cannot send material engine request",
-            )
-        })?;
-    }
-    drop(child.stdin.take());
+    })?;
     let stdout = child.stdout.take().ok_or_else(|| {
         error(
             focaus_contracts::ErrorCode::ProviderError,
             "Local material engine output unavailable",
         )
     })?;
-    let mut published = None;
-    for line in BufReader::new(stdout).lines() {
-        let line = line.map_err(|_| {
-            error(
-                focaus_contracts::ErrorCode::ProviderError,
-                "Cannot read material engine response",
-            )
-        })?;
-        let response: EngineResponse = serde_json::from_str(&line).map_err(|_| {
+    writeln!(
+        stdin,
+        "{}",
+        serde_json::to_string(&handshake).map_err(|_| {
             error(
                 focaus_contracts::ErrorCode::InvalidResult,
-                "Material engine returned an invalid response",
+                "Cannot encode material engine handshake",
             )
-        })?;
-        let handshake_response = matches!(&response.kind, EngineResponseKind::Ready);
-        let identity_matches = if handshake_response {
-            response.request_id == handshake.request_id && response.task_id.is_none()
-        } else {
-            response.request_id == request.request_id
-                && response.task_id.as_deref() == Some(task_id)
-        };
+        })?
+    )
+    .map_err(|_| {
+        error(
+            focaus_contracts::ErrorCode::ProviderError,
+            "Cannot send material engine handshake",
+        )
+    })?;
+    stdin.flush().map_err(|_| {
+        error(
+            focaus_contracts::ErrorCode::ProviderError,
+            "Cannot flush material engine handshake",
+        )
+    })?;
+    let mut reader = BufReader::new(stdout);
+    let ready = read_engine_response(&mut reader)?;
+    if ready.kind != EngineResponseKind::Ready
+        || ready.request_id != handshake.request_id
+        || ready.task_id.is_some()
+    {
+        return Err(error(
+            focaus_contracts::ErrorCode::InvalidResult,
+            "Material engine did not complete its handshake",
+        ));
+    }
+    verify_capabilities(&ready.payload)?;
+    writeln!(
+        stdin,
+        "{}",
+        serde_json::to_string(&request).map_err(|_| {
+            error(
+                focaus_contracts::ErrorCode::InvalidResult,
+                "Cannot encode material engine request",
+            )
+        })?
+    )
+    .map_err(|_| {
+        error(
+            focaus_contracts::ErrorCode::ProviderError,
+            "Cannot send material engine request",
+        )
+    })?;
+    stdin.flush().map_err(|_| {
+        error(
+            focaus_contracts::ErrorCode::ProviderError,
+            "Cannot flush material engine request",
+        )
+    })?;
+    drop(stdin);
+    let mut published = None;
+    while let Some(response) = read_engine_response_optional(&mut reader)? {
+        let identity_matches = response.request_id == request.request_id
+            && response.task_id.as_deref() == Some(task_id);
         if !identity_matches {
             return Err(error(
                 focaus_contracts::ErrorCode::InvalidResult,
@@ -194,7 +199,12 @@ fn run_local_sidecar_inner(
             ));
         }
         match response.kind {
-            EngineResponseKind::Ready => verify_capabilities(&response.payload)?,
+            EngineResponseKind::Ready => {
+                return Err(error(
+                    focaus_contracts::ErrorCode::InvalidResult,
+                    "Material engine sent a second handshake response",
+                ));
+            }
             EngineResponseKind::Completed => {
                 let manifest: MaterialManifest = serde_json::from_value(
                     response.payload.get("manifest").cloned().ok_or_else(|| {
@@ -247,6 +257,36 @@ fn run_local_sidecar_inner(
                 "Material engine exited before publication",
             )
         }
+    })
+}
+
+fn read_engine_response(reader: &mut impl BufRead) -> Result<EngineResponse, SafeError> {
+    read_engine_response_optional(reader)?.ok_or_else(|| {
+        error(
+            focaus_contracts::ErrorCode::ProviderError,
+            "Material engine ended before responding",
+        )
+    })
+}
+
+fn read_engine_response_optional(
+    reader: &mut impl BufRead,
+) -> Result<Option<EngineResponse>, SafeError> {
+    let mut line = String::new();
+    let read = reader.read_line(&mut line).map_err(|_| {
+        error(
+            focaus_contracts::ErrorCode::ProviderError,
+            "Cannot read material engine response",
+        )
+    })?;
+    if read == 0 {
+        return Ok(None);
+    }
+    serde_json::from_str(&line).map(Some).map_err(|_| {
+        error(
+            focaus_contracts::ErrorCode::InvalidResult,
+            "Material engine returned an invalid response",
+        )
     })
 }
 

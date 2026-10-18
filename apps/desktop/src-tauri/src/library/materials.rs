@@ -10,7 +10,7 @@ use crate::{
     tasks::TaskManager,
 };
 use focaus_contracts::*;
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -120,6 +120,26 @@ fn validate_existing_parse_identity(
         ErrorCode::IdempotencyMismatch,
         "Parse version ID reused for different package",
     ))
+}
+
+fn current_publication_parent(
+    c: &Connection,
+    material_id: &str,
+    source_version_id: &str,
+) -> Result<(Option<String>, bool)> {
+    let current = head(c, material_id)?;
+    let current_parse = current["parse_version_id"].as_str().map(str::to_owned);
+    let parent_exists = if let Some(parent) = current_parse.as_deref() {
+        c.query_row(
+            "SELECT EXISTS(SELECT 1 FROM parse_versions WHERE parse_version_id=?1 AND material_id=?2 AND source_version_id=?3)",
+            params![parent, material_id, source_version_id],
+            |r| r.get::<_, bool>(0),
+        )
+        .map_err(sql_error)?
+    } else {
+        false
+    };
+    Ok((current_parse, parent_exists))
 }
 
 impl MaterialService {
@@ -446,19 +466,7 @@ impl MaterialService {
             );
         }
         let (current_parse_version, parent_exists) = self.store.read(|c| {
-            let current = head(c, &manifest.material_id)?;
-            let current_parse = current["parse_version_id"].as_str().map(str::to_owned);
-            let parent_exists = if let Some(parent) = manifest.parent_parse_version_id.as_deref() {
-                c.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM parse_versions WHERE parse_version_id=?1 AND material_id=?2 AND source_version_id=?3)",
-                    params![parent, manifest.material_id, manifest.source_version_id],
-                    |r| r.get::<_, bool>(0),
-                )
-                .map_err(sql_error)?
-            } else {
-                false
-            };
-            Ok((current_parse, parent_exists))
+            current_publication_parent(c, &manifest.material_id, &manifest.source_version_id)
         })?;
         validate_publication_parent(
             current_parse_version.as_deref(),
@@ -722,6 +730,13 @@ impl MaterialService {
         }
         let result=self.store.write(|t| {
             snapshots::check_frozen(t,&snapshot)?;let current_task=crate::tasks::task(t,&task.task_id)?;if current_task.attempt!=task.attempt||!matches!(current_task.state,TaskState::Queued|TaskState::Running|TaskState::Interrupted){return Err(error(ErrorCode::StaleInput,"Material task was cancelled or superseded"));}
+            let final_duplicate:Option<(String,String,Option<String>,String)>=t.query_row("SELECT material_id,source_version_id,parent_parse_version_id,content_hash FROM parse_versions WHERE parse_version_id=?1",[&manifest.parse_version_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional().map_err(sql_error)?;
+            if let Some((material_id,source_version_id,parent_parse_version_id,hash))=final_duplicate {
+                validate_existing_parse_identity((&material_id,&source_version_id,parent_parse_version_id.as_deref(),&hash),&manifest.material_id,&manifest.source_version_id,manifest.parent_parse_version_id.as_deref(),&manifest_hash)?;
+                return Ok(json!({"material_id":manifest.material_id,"parse_version_id":manifest.parse_version_id,"publication":"committed","duplicate":true}));
+            }
+            let (current_parse_version,parent_exists)=current_publication_parent(t,&manifest.material_id,&manifest.source_version_id)?;
+            validate_publication_parent(current_parse_version.as_deref(),manifest.parent_parse_version_id.as_deref(),parent_exists)?;
             let scope_hash=canonical_hash(&json!([manifest.material_id,manifest.source_version_id]));
             for identity in manifest.pages.iter().map(|p|p.page_id.as_str()).chain(manifest.regions.iter().map(|r|r.region_id.as_str())).chain(object_values.iter().map(|o|o["object_id"].as_str().unwrap_or(""))) {
                 let prior:Option<String>=t.query_row("SELECT request_hash FROM idempotency WHERE actor_id='native.material_identity' AND command_name='confirm' AND idempotency_key=?1",[identity],|r|r.get(0)).optional().map_err(sql_error)?;
