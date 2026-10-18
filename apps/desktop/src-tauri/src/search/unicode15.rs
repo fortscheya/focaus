@@ -2,6 +2,7 @@
 // Source https://www.unicode.org/Public/15.0.0/ucd/CaseFolding.txt
 // SHA-256 cdd49e55eae3bbf1f0a3f6580c974a0263cb86a6a08daa10fbf705b4808a56f7
 // Unicode data license: https://www.unicode.org/license.txt
+#[rustfmt::skip]
 pub fn fold(c:char)->Option<&'static str> { match c {
 '\u{41}' => Some("\u{61}"),
 '\u{42}' => Some("\u{62}"),
