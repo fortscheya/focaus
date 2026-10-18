@@ -7,9 +7,12 @@
 
 use crate::{invalid, invalid_argument, models, PROMPT_SECONDARY_V1};
 use focaus_contracts::{
-    CorrectionSuggestion, CorrectionSuggestionSemanticRisk, CorrectionSuggestionState,
-    Definition, EntityId, InputSnapshot, LanguageVariant, LanguageVariantSyncStatus, ModelId,
-    Selector, SafeError, SecondarySegment, SourceRef, SymbolBinding, TaskKind, UserPatch,
+    Command, CommandActor, CommandName, CommandResult, CorrectionAcceptInput,
+    CorrectionRejectInput, CorrectionSuggestion, CorrectionSuggestionSemanticRisk,
+    CorrectionSuggestionState, Definition, EntityId, HostServices, InputSnapshot,
+    LanguageVariant, LanguageVariantSyncStatus, ModelId, ResultSubmitInput, Selector,
+    SafeError, SecondarySegment, SourceRef, SymbolBinding, TaskKind, UserPatch,
+    CONTRACT_VERSION,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -42,6 +45,68 @@ pub struct SecondaryDraft {
 pub struct TrimmedText {
     pub text: String,
     pub removed_fillers: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CorrectionAction {
+    Accept,
+    Reject,
+}
+
+fn source_units_for_secondary<'a>(
+    recording_id: &str,
+    raw_refs: &[SourceRef],
+    ordered_spans: &[EntityId],
+    raw_units: &'a [RawTextUnit],
+) -> Result<Vec<&'a RawTextUnit>, SafeError> {
+    if recording_id.is_empty() || raw_refs.is_empty() || raw_refs.len() != ordered_spans.len() {
+        return Err(invalid("secondary_source_refs_mismatch"));
+    }
+    let mut seen = BTreeSet::new();
+    let mut selected = Vec::with_capacity(ordered_spans.len());
+    for (source_ref, span_id) in raw_refs.iter().zip(ordered_spans) {
+        if source_ref.entity_id.is_empty() || source_ref.revision_id.is_empty() {
+            return Err(invalid("secondary_raw_source_ref_incomplete"));
+        }
+        if span_id.is_empty() || !seen.insert(span_id.clone()) {
+            return Err(invalid("secondary_source_span_not_unique"));
+        }
+        let Some(unit) = raw_units
+            .iter()
+            .find(|unit| unit.recording_id.as_str() == recording_id && unit.span_id.as_str() == span_id.as_str())
+        else {
+            return Err(crate::task_error(
+                focaus_contracts::ErrorCode::SourceUnavailable,
+                "secondary_raw_source_unavailable",
+                false,
+            ));
+        };
+        if &unit.source_ref != source_ref {
+            return Err(stale("secondary_raw_source_revision_mismatch"));
+        }
+        selected.push(unit);
+    }
+    Ok(selected)
+}
+
+fn validate_raw_units_for_request(raw_units: &[RawTextUnit]) -> Result<(), SafeError> {
+    if raw_units.is_empty() {
+        return Err(invalid_argument("secondary_raw_text_required"));
+    }
+    let recording_id = &raw_units[0].recording_id;
+    let mut spans = BTreeSet::new();
+    for unit in raw_units {
+        if unit.recording_id.as_str() != recording_id.as_str()
+            || unit.span_id.is_empty()
+            || !spans.insert(unit.span_id.clone())
+        {
+            return Err(invalid("secondary_raw_units_not_orderable"));
+        }
+        if unit.source_ref.entity_id.is_empty() || unit.source_ref.revision_id.is_empty() {
+            return Err(invalid("secondary_raw_source_ref_incomplete"));
+        }
+    }
+    Ok(())
 }
 
 pub fn validate_secondary_snapshot(snapshot: &InputSnapshot) -> Result<(), SafeError> {
@@ -83,14 +148,13 @@ pub fn validate_secondary_draft(
     if draft.recording_id.is_empty() || draft.raw_refs.is_empty() || draft.text.trim().is_empty() {
         return Err(invalid("secondary_draft_missing_identity_or_source"));
     }
-    let raw_text = raw_units
-        .iter()
-        .filter(|unit| unit.recording_id == draft.recording_id)
-        .map(|unit| unit.text.as_str())
-        .collect::<String>();
-    if raw_text.is_empty() {
-        return Err(invalid("secondary_raw_source_unavailable"));
-    }
+    let selected = source_units_for_secondary(
+        &draft.recording_id,
+        &draft.raw_refs,
+        &draft.ordered_spans,
+        raw_units,
+    )?;
+    let raw_text = selected.iter().map(|unit| unit.text.as_str()).collect::<String>();
     let source_normalized = strip_non_content(&raw_text);
     let draft_normalized = strip_non_content(&draft.text);
     if !is_subsequence(&draft_normalized, &source_normalized) {
@@ -214,6 +278,245 @@ pub fn make_correction(
     let original_text = original_text.into();
     let suggested_text = suggested_text.into();
     CorrectionSuggestion { suggestion_id: suggestion_id.into(), secondary_id: secondary_id.into(), source_revision: source_revision.into(), anchor, original_text: original_text.clone(), suggested_text: suggested_text.clone(), reason: reason.into(), semantic_risk: classify_semantic_risk(&original_text, &suggested_text), state: CorrectionSuggestionState::Pending }
+}
+
+/// Validate one model-produced correction against the exact secondary
+/// revision and the raw spans from which that secondary was built.  Raw ASR
+/// is deliberately never an output target of this function.
+pub fn validate_correction_candidate(
+    suggestion: &CorrectionSuggestion,
+    segment: &SecondarySegment,
+    raw_units: &[RawTextUnit],
+) -> Result<(), SafeError> {
+    source_units_for_secondary(
+        &segment.recording_id,
+        &segment.raw_refs,
+        &segment.ordered_spans,
+        raw_units,
+    )?;
+    if suggestion.secondary_id != segment.secondary_id {
+        return Err(stale("correction_secondary_target_stale"));
+    }
+    if suggestion.source_revision != segment.revision_id {
+        return Err(stale("correction_source_revision_stale"));
+    }
+    if suggestion.state != CorrectionSuggestionState::Pending {
+        return Err(stale("correction_suggestion_not_pending"));
+    }
+    if suggestion.original_text.trim().is_empty() || suggestion.suggested_text.trim().is_empty() {
+        return Err(invalid("secondary_correction_text_missing"));
+    }
+    if suggestion.semantic_risk
+        != classify_semantic_risk(&suggestion.original_text, &suggestion.suggested_text)
+    {
+        return Err(invalid("secondary_correction_risk_mismatch"));
+    }
+    let segment_text = strip_non_content(&segment.text);
+    if !is_subsequence(&strip_non_content(&suggestion.original_text), &segment_text) {
+        return Err(stale("correction_anchor_source_stale"));
+    }
+    let range = &suggestion.anchor.scalar_range;
+    let text_len = segment.text.chars().count() as u64;
+    if range.start > range.end || range.end > text_len {
+        return Err(stale("correction_anchor_range_stale"));
+    }
+    Ok(())
+}
+
+fn validate_correction_action(
+    suggestion: &CorrectionSuggestion,
+    segment: &SecondarySegment,
+    raw_units: &[RawTextUnit],
+    action: CorrectionAction,
+    final_text: &str,
+    critical_confirmed: bool,
+) -> Result<(), SafeError> {
+    validate_correction_candidate(suggestion, segment, raw_units)?;
+    let Some(current) = segment
+        .suggestions
+        .iter()
+        .find(|candidate| candidate.suggestion_id == suggestion.suggestion_id)
+    else {
+        return Err(stale("correction_candidate_not_current"));
+    };
+    if current != suggestion {
+        return Err(stale("correction_candidate_revision_mismatch"));
+    }
+    if final_text.trim().is_empty() {
+        return Err(invalid_argument("correction_final_text_required"));
+    }
+    if matches!(action, CorrectionAction::Reject) {
+        if final_text != suggestion.original_text {
+            return Err(invalid_argument("rejected_correction_must_keep_original"));
+        }
+        return Ok(());
+    }
+    let final_risk = classify_semantic_risk(&suggestion.original_text, final_text);
+    if (suggestion.semantic_risk == CorrectionSuggestionSemanticRisk::Critical
+        || final_risk == CorrectionSuggestionSemanticRisk::Critical)
+        && !critical_confirmed
+    {
+        return Err(invalid_argument("critical_correction_requires_confirmation"));
+    }
+    Ok(())
+}
+
+/// Build the exact user command consumed by NativeHost's ContentStore path.
+/// The command carries the current Secondary revision as both its base and
+/// expected revision; a stale UI cannot migrate the anchor to a newer body.
+pub fn build_correction_command(
+    command_id: impl Into<String>,
+    idempotency_key: impl Into<String>,
+    window_id: Option<EntityId>,
+    suggestion: &CorrectionSuggestion,
+    segment: &SecondarySegment,
+    raw_units: &[RawTextUnit],
+    action: CorrectionAction,
+    final_text: impl Into<String>,
+    critical_confirmed: bool,
+) -> Result<Command, SafeError> {
+    let command_id = command_id.into();
+    let idempotency_key = idempotency_key.into();
+    let final_text = final_text.into();
+    if command_id.trim().is_empty() || idempotency_key.trim().is_empty() {
+        return Err(invalid_argument("correction_command_identity_required"));
+    }
+    validate_correction_action(
+        suggestion,
+        segment,
+        raw_units,
+        action,
+        &final_text,
+        critical_confirmed,
+    )?;
+    let mut expected_revisions = std::collections::BTreeMap::new();
+    expected_revisions.insert(segment.secondary_id.clone(), segment.revision_id.clone());
+    let (name, payload) = match action {
+        CorrectionAction::Accept => (
+            CommandName::CorrectionAccept,
+            serde_json::to_value(CorrectionAcceptInput {
+                suggestion_id: suggestion.suggestion_id.clone(),
+                base_revision: segment.revision_id.clone(),
+                final_text,
+            })
+            .map_err(|_| invalid("correction_command_serialization_failed"))?,
+        ),
+        CorrectionAction::Reject => (
+            CommandName::CorrectionReject,
+            serde_json::to_value(CorrectionRejectInput {
+                suggestion_id: suggestion.suggestion_id.clone(),
+                base_revision: segment.revision_id.clone(),
+                final_text,
+            })
+            .map_err(|_| invalid("correction_command_serialization_failed"))?,
+        ),
+    };
+    Ok(Command {
+        contract_version: CONTRACT_VERSION.to_string(),
+        command_id,
+        name,
+        actor: CommandActor::User,
+        window_id,
+        payload,
+        idempotency_key: Some(idempotency_key),
+        expected_revisions: Some(expected_revisions),
+    })
+}
+
+/// Invoke the same host command route used by the UI for an explicit accept or
+/// reject.  The host remains authoritative for the transaction and revision
+/// commit; this helper only performs the preflight source gate.
+pub async fn apply_correction<H: HostServices>(
+    host: &H,
+    command_id: impl Into<String>,
+    idempotency_key: impl Into<String>,
+    window_id: Option<EntityId>,
+    suggestion: &CorrectionSuggestion,
+    segment: &SecondarySegment,
+    raw_units: &[RawTextUnit],
+    action: CorrectionAction,
+    final_text: impl Into<String>,
+    critical_confirmed: bool,
+) -> Result<CommandResult, SafeError> {
+    let command = build_correction_command(
+        command_id,
+        idempotency_key,
+        window_id,
+        suggestion,
+        segment,
+        raw_units,
+        action,
+        final_text,
+        critical_confirmed,
+    )?;
+    host.invoke(command).await
+}
+
+/// Submit a Secondary result through the formal task/result boundary.  The
+/// task snapshot must carry the current Secondary base revision; raw source
+/// refs are sent separately so NativeHost can perform its own CAS checks.
+pub async fn submit_secondary_result<H: HostServices>(
+    host: &H,
+    task_id: impl Into<String>,
+    attempt: u64,
+    snapshot: &InputSnapshot,
+    segment: &SecondarySegment,
+    raw_units: &[RawTextUnit],
+) -> Result<CommandResult, SafeError> {
+    validate_secondary_snapshot(snapshot)?;
+    let Some(expected_revision) = snapshot.target_base_revision.as_deref() else {
+        return Err(invalid_argument("secondary_target_revision_required"));
+    };
+    if expected_revision != segment.revision_id {
+        return Err(stale("secondary_result_revision_stale"));
+    }
+    if snapshot.recording_id.as_deref() != Some(segment.recording_id.as_str()) {
+        return Err(stale("secondary_result_recording_stale"));
+    }
+    validate_secondary_segment(segment, raw_units)?;
+    let candidate = serde_json::to_value(segment)
+        .map_err(|_| invalid("secondary_result_serialization_failed"))?;
+    host.result_submit(ResultSubmitInput {
+        task_id: task_id.into(),
+        attempt,
+        snapshot_id: snapshot.snapshot_id.clone(),
+        candidate,
+        source_refs: segment.raw_refs.clone(),
+        resources: vec![],
+    })
+    .await
+}
+
+pub fn validate_secondary_segment(
+    segment: &SecondarySegment,
+    raw_units: &[RawTextUnit],
+) -> Result<(), SafeError> {
+    if segment.secondary_id.is_empty()
+        || segment.recording_id.is_empty()
+        || segment.generation_revision.is_empty()
+        || segment.revision_id.is_empty()
+        || segment.text.trim().is_empty()
+    {
+        return Err(invalid("secondary_segment_identity_or_text_missing"));
+    }
+    source_units_for_secondary(
+        &segment.recording_id,
+        &segment.raw_refs,
+        &segment.ordered_spans,
+        raw_units,
+    )?;
+    let draft = SecondaryDraft {
+        recording_id: segment.recording_id.clone(),
+        raw_refs: segment.raw_refs.clone(),
+        ordered_spans: segment.ordered_spans.clone(),
+        text: segment.text.clone(),
+        suggestions: segment.suggestions.clone(),
+    };
+    validate_secondary_draft(&draft, raw_units)?;
+    for suggestion in &segment.suggestions {
+        validate_correction_candidate(suggestion, segment, raw_units)?;
+    }
+    Ok(())
 }
 
 pub fn validate_five_tier_variants(
@@ -398,16 +701,26 @@ pub fn validate_qa_parts(parts: &[QaPart]) -> Result<(), SafeError> {
 }
 
 pub fn build_secondary_request(snapshot: &InputSnapshot, raw_text: &[RawTextUnit]) -> Result<Value, SafeError> {
+    let binding = crate::binding_for_model(ModelId::Qwen38Flash);
+    build_secondary_request_with_binding(snapshot, &binding, raw_text)
+}
+
+pub fn build_secondary_request_with_binding(
+    snapshot: &InputSnapshot,
+    binding: &focaus_contracts::CredentialBinding,
+    raw_text: &[RawTextUnit],
+) -> Result<Value, SafeError> {
     validate_secondary_snapshot(snapshot)?;
-    if raw_text.is_empty() {
-        return Err(invalid_argument("secondary_raw_text_required"));
-    }
+    crate::binding_matches(binding, ModelId::Qwen38Flash)?;
+    validate_raw_units_for_request(raw_text)?;
     Ok(crate::transport::build_chat_completion_body(
         models::MULTIMODAL,
         PROMPT_SECONDARY_V1,
         "Clean direct speech without paraphrasing or third-person narration. Return only the requested JSON object.",
         json!({
             "snapshot_id": snapshot.snapshot_id,
+            "current_secondary_revision": snapshot.target_base_revision,
+            "source_refs": raw_text.iter().map(|unit| unit.source_ref.clone()).collect::<Vec<_>>(),
             "raw_units": raw_text,
             "output_contract": "direct_speech_cleanup_with_review_suggestions",
             "constraints": ["no_third_person_rewrite", "preserve_order", "critical_changes_are_suggestions"]
@@ -428,6 +741,27 @@ mod tests {
         RawTextUnit { utterance_id: "u".into(), recording_id: "rec".into(), text: text.into(), source_ref: source(), span_id: "span".into() }
     }
 
+    fn correction_fixture() -> (SecondarySegment, RawTextUnit, CorrectionSuggestion) {
+        let raw = unit("the value is 2");
+        let mut segment = build_secondary_segment("sec", "generation-1", "secondary-rev-1", &[raw.clone()]).unwrap();
+        let suggestion = make_correction(
+            "suggestion-1",
+            "sec",
+            "secondary-rev-1",
+            focaus_contracts::TextAnchor {
+                left_element_id: None,
+                right_element_id: None,
+                element_ids: vec![],
+                scalar_range: focaus_contracts::ScalarRange { start: 0, end: 14 },
+            },
+            "the value is 2",
+            "the value is 3",
+            "check the numeric value",
+        );
+        segment.suggestions = vec![suggestion.clone()];
+        (segment, raw, suggestion)
+    }
+
     fn secondary_snapshot(model: ModelId) -> InputSnapshot {
         InputSnapshot { snapshot_id: "snap".into(), parent_snapshot_id: None, contract_version: "2.0.0".into(), purpose: TaskKind::Secondary, target_id: "rec".into(), lesson_id: None, recording_id: Some("rec".into()), assignment_epoch: Some(1), sources: vec![source()], attachment_set_revision: "attach".into(), fact_set_revision: None, target_base_revision: None, edit_revision: None, language_tier: Some(3), evidence_cutoff: vec![EvidenceCutoff { recording_id: "rec".into(), end_ms: Some(10), status: EvidenceCutoffStatus::Known }], available_at: "2026-01-01T00:00:00Z".into(), executor_id: "ai".into(), executor_version: "1".into(), model_id: Some(model), region: Some("cn-beijing".into()), prompt_version: Some(PROMPT_SECONDARY_V1.into()), parameters_hash: "p".into(), calibration_seq: None, decision_seq: None }
     }
@@ -444,6 +778,63 @@ mod tests {
         assert!(validate_secondary_snapshot(&secondary_snapshot(ModelId::DecisionModelPreview)).is_err());
         assert!(validate_secondary_snapshot(&secondary_snapshot(ModelId::QwenAudio31AsrFlashFiletrans)).is_err());
         assert!(build_secondary_request(&secondary_snapshot(ModelId::Qwen38Flash), &[unit("it works")]).is_ok());
+        let wrong_binding = crate::binding_for_model(ModelId::DecisionModelPreview);
+        assert_eq!(
+            build_secondary_request_with_binding(&secondary_snapshot(ModelId::Qwen38Flash), &wrong_binding, &[unit("it works")]).unwrap_err().code,
+            focaus_contracts::ErrorCode::InvalidArgument,
+        );
+    }
+
+    #[test]
+    fn secondary_draft_cannot_use_unselected_or_stale_raw_sources() {
+        let first = unit("first");
+        let mut second = unit("second");
+        second.span_id = "span-2".into();
+        let draft = SecondaryDraft {
+            recording_id: "rec".into(),
+            raw_refs: vec![first.source_ref.clone()],
+            ordered_spans: vec![first.span_id.clone()],
+            text: "second".into(),
+            suggestions: vec![],
+        };
+        assert_eq!(validate_secondary_draft(&draft, &[first.clone(), second]).unwrap_err().code, focaus_contracts::ErrorCode::InvalidResult);
+        let mut changed = first.clone();
+        changed.source_ref.revision_id = "raw-rev-2".into();
+        assert_eq!(validate_secondary_draft(&draft, &[changed]).unwrap_err().code, focaus_contracts::ErrorCode::StaleInput);
+    }
+
+    #[test]
+    fn correction_candidate_is_bound_to_current_secondary_and_raw_revisions() {
+        let (segment, raw, suggestion) = correction_fixture();
+        validate_correction_candidate(&suggestion, &segment, &[raw.clone()]).unwrap();
+
+        let mut stale_candidate = suggestion.clone();
+        stale_candidate.source_revision = "secondary-rev-0".into();
+        assert_eq!(validate_correction_candidate(&stale_candidate, &segment, &[raw.clone()]).unwrap_err().code, focaus_contracts::ErrorCode::StaleInput);
+
+        let mut changed_raw = raw;
+        changed_raw.source_ref.revision_id = "raw-rev-2".into();
+        assert_eq!(validate_correction_candidate(&suggestion, &segment, &[changed_raw]).unwrap_err().code, focaus_contracts::ErrorCode::StaleInput);
+    }
+
+    #[test]
+    fn correction_commands_gate_critical_accept_and_preserve_raw_layer() {
+        let (segment, raw, suggestion) = correction_fixture();
+        let raw_before = raw.clone();
+        assert_eq!(
+            build_correction_command("cmd-1", "idem-1", None, &suggestion, &segment, &[raw.clone()], CorrectionAction::Accept, "the value is 3", false).unwrap_err().code,
+            focaus_contracts::ErrorCode::InvalidArgument,
+        );
+        let accepted = build_correction_command("cmd-2", "idem-2", None, &suggestion, &segment, &[raw.clone()], CorrectionAction::Accept, "the value is 3", true).unwrap();
+        assert_eq!(accepted.name, CommandName::CorrectionAccept);
+        assert_eq!(accepted.payload["base_revision"], "secondary-rev-1");
+        assert_eq!(accepted.expected_revisions.as_ref().unwrap()["sec"], "secondary-rev-1");
+        assert_eq!(raw, raw_before);
+
+        let rejected = build_correction_command("cmd-3", "idem-3", None, &suggestion, &segment, &[raw.clone()], CorrectionAction::Reject, "the value is 2", false).unwrap();
+        assert_eq!(rejected.name, CommandName::CorrectionReject);
+        assert_eq!(rejected.payload["final_text"], "the value is 2");
+        assert_eq!(build_correction_command("cmd-4", "idem-4", None, &suggestion, &segment, &[raw], CorrectionAction::Reject, "the value is 3", false).unwrap_err().code, focaus_contracts::ErrorCode::InvalidArgument);
     }
 
     #[test]
