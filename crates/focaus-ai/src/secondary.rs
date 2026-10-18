@@ -5,7 +5,7 @@
 //! third-person summary.  Critical semantic corrections remain suggestions
 //! for user review.
 
-use crate::{invalid, invalid_argument, models, PROMPT_SECONDARY_V1};
+use crate::{invalid, invalid_argument, models, stale, PROMPT_SECONDARY_V1};
 use focaus_contracts::{
     Command, CommandActor, CommandName, CommandResult, CorrectionAcceptInput,
     CorrectionRejectInput, CorrectionSuggestion, CorrectionSuggestionSemanticRisk,
