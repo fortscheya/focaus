@@ -576,7 +576,11 @@ class MaterialEngine:
                 corrections,
                 accepted_parse_version_ids=published_parse_versions,
             )
-            final_parent_id = head_id or parent_parse_version_id
+            # Checkpoint snapshots form an internal recovery chain.  The
+            # final product publication must point at the host's verified
+            # parse parent, rather than at a transient page checkpoint that
+            # the host never published.
+            final_parent_id = parent_parse_version_id
             final_manifest, final_snapshot = publish_snapshot(
                 parse_version_id,
                 final_parent_id,

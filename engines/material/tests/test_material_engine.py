@@ -141,7 +141,7 @@ class MaterialEngineTests(TestCase):
         self.assertEqual(len(set(published)), 3)
         self.assertEqual([item["manifest"]["parse_version_id"] for item in page_results], published[:2])
         self.assertEqual([len(item["manifest"]["pages"]) for item in page_results], [1, 2])
-        self.assertEqual(manifest["parent_parse_version_id"], published[-2])
+        self.assertIsNone(manifest["parent_parse_version_id"])
         for index, parse_version_id in enumerate(published):
             snapshot_path = self.root / "publication-chain" / "snapshots" / (parse_version_id + ".json")
             self.assertTrue(snapshot_path.is_file())
