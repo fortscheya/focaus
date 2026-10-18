@@ -12,12 +12,17 @@ def _selector_object_ids(selector: dict, objects: Iterable[dict]) -> List[str]:
     object_list = list(objects)
     kind = selector.get("kind")
     if kind == "object":
-        return [selector["object_id"]] if any(o.get("object_id") == selector.get("object_id") for o in object_list) else []
+        object_id = selector.get("object_id")
+        return [object_id] if object_id and any(o.get("object_id") == object_id for o in object_list) else []
     if kind == "text":
         block_id = selector.get("block_id")
+        if not block_id:
+            return []
         return [o["object_id"] for o in object_list if o.get("type") == "text" and o.get("content", {}).get("block_id") == block_id]
     if kind == "material_region":
         region_id = selector.get("region_id")
+        if not region_id:
+            return []
         return [o["object_id"] for o in object_list if region_id in o.get("region_ids", [])]
     return []
 
@@ -166,6 +171,16 @@ def replay_corrections(
         elif correction.get("parse_version_id") not in allowed_parse_versions:
             status = "conflict"
             conflicts.append("{}:parse_version_mismatch".format(correction_id))
+        elif selector.get("kind") == "material_region" and (
+            selector.get("material_id") != ctx.material_id
+            or selector.get("source_version_id") != ctx.source_version_id
+            or selector.get("parse_version_id") not in allowed_parse_versions
+        ):
+            status = "conflict"
+            conflicts.append("{}:selector_source_mismatch".format(correction_id))
+        elif selector.get("kind") not in ("object", "text", "material_region"):
+            status = "conflict"
+            conflicts.append("{}:selector_unsupported".format(correction_id))
         elif candidates:
             if len(candidates) > 1:
                 status = "conflict"

@@ -48,6 +48,14 @@ identity 与 `progress`，便于宿主在不解析内部路径的情况下核对
 资源 hash 和闭包后才开始发布；不存在的父版本不会被静默当作根。资源字节按
 `resource_id`/SHA-256 复用并拒绝不同字节覆盖，旧 snapshot JSON 始终保留。
 
+宿主的 `material.reparse`/`material.correct` 流程通过下一次 `convert` 或 `resume`
+请求的 `corrections` 集合进入 sidecar。sidecar 只在新的 parse/publication 草稿上
+重放；`applied` 纠正必须匹配 source version、已知 parse publication、对象/区域闭包、
+`before_hash` 和 search anchor，旧 snapshot、原始资源和用户层数据不会被改写。
+source、parse、selector 或 hash 不一致的记录保留在 `corrections_applied` 中并标为
+`conflict`，同时写入 `unresolved_conflicts`，交给宿主继续 review；表格单元格、公式、
+图表点和结构图边支持的替换按各自对象结构重放，其余能力保持 `conflict`/`partial`。
+
 ## 解析和覆盖边界
 
 - PDF 先读取原生文字流，并用 `pdftoppm`（若宿主提供）生成原页 PNG 预览。

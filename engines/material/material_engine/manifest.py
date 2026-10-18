@@ -234,6 +234,54 @@ def _iter_source_refs(value):
             yield from _iter_source_refs(nested)
 
 
+def _correction_parse_versions(manifest: dict) -> set:
+    provenance = manifest.get("provenance", {})
+    values = {
+        manifest.get("parse_version_id"),
+        manifest.get("parent_parse_version_id"),
+        provenance.get("base_parent_parse_version_id"),
+    }
+    values.update(provenance.get("publication_chain", []))
+    return {str(value) for value in values if value}
+
+
+def _validate_applied_correction_selector(
+    selector: dict,
+    *,
+    manifest: dict,
+    page_ids: set,
+    region_by_id: dict,
+    object_ids: set,
+    correction_parse_versions: set,
+) -> None:
+    kind = selector.get("kind")
+    if kind == "material_region":
+        if (
+            selector.get("material_id") != manifest["material_id"]
+            or selector.get("source_version_id") != manifest["source_version_id"]
+            or selector.get("parse_version_id") not in correction_parse_versions
+        ):
+            _invalid_result("applied correction selector escaped its source parse")
+        page_id = selector.get("page_id")
+        region_id = selector.get("region_id")
+        region = region_by_id.get(region_id)
+        if page_id not in page_ids or region is None or region.get("page_id") != page_id:
+            _invalid_result("applied correction selector points outside the package")
+    elif kind == "object":
+        if selector.get("object_id") not in object_ids:
+            _invalid_result("applied correction object selector is outside the package")
+    elif kind == "text":
+        block_ids = {
+            obj.get("content", {}).get("block_id")
+            for obj in manifest.get("objects", [])
+            if obj.get("type") == "text"
+        }
+        if selector.get("block_id") not in block_ids:
+            _invalid_result("applied correction text selector is outside the package")
+    else:
+        _invalid_result("applied correction selector is unsupported")
+
+
 def validate_manifest(manifest: dict, staging_root: Path, *, check_resources: bool = True) -> None:
     required = {
         "format", "format_version", "material_id", "source_version_id", "parse_version_id",
@@ -309,6 +357,7 @@ def validate_manifest(manifest: dict, staging_root: Path, *, check_resources: bo
         if not isinstance(alternate_anchors, list):
             _invalid_result("search unit alternate anchors are not a list")
         anchors = [unit.get("anchor")] + alternate_anchors
+        has_material_anchor = False
         for anchor in anchors:
             if not isinstance(anchor, dict):
                 _invalid_result("search unit contains an invalid anchor")
@@ -339,6 +388,9 @@ def validate_manifest(manifest: dict, staging_root: Path, *, check_resources: bo
                 object_ids=object_ids,
                 owner_entity_id=unit.get("owner_entity_id"),
             )
+            has_material_anchor = has_material_anchor or selector.get("kind") == "material_region"
+        if not has_material_anchor:
+            _invalid_result("search unit has no material region anchor")
     for source in _iter_source_refs(manifest.get("provenance", {})):
         _validate_source_ref(
             source,
@@ -347,6 +399,29 @@ def validate_manifest(manifest: dict, staging_root: Path, *, check_resources: bo
             region_by_id=region_by_id,
             object_ids=object_ids,
         )
+    correction_parse_versions = _correction_parse_versions(manifest)
+    for correction in manifest["corrections_applied"]:
+        if not isinstance(correction, dict):
+            _invalid_result("correction record is not an object", scope="asset")
+        status = correction.get("replay_status")
+        if status not in ("applied", "conflict", "unmatched"):
+            _invalid_result("correction record has an invalid replay status", scope="asset")
+        if status == "applied":
+            if correction.get("source_version_id") != manifest["source_version_id"]:
+                _invalid_result("applied correction source version does not match manifest", scope="asset")
+            if correction.get("parse_version_id") not in correction_parse_versions:
+                _invalid_result("applied correction parse version is outside publication history", scope="asset")
+            selector = correction.get("selector")
+            if not isinstance(selector, dict):
+                _invalid_result("applied correction has no selector", scope="asset")
+            _validate_applied_correction_selector(
+                selector,
+                manifest=manifest,
+                page_ids=page_ids,
+                region_by_id=region_by_id,
+                object_ids=object_ids,
+                correction_parse_versions=correction_parse_versions,
+            )
     coverage = manifest["search_coverage"]
     if not set(coverage.get("requested_pages", [])) <= page_ids or not set(coverage.get("processed_pages", [])) <= page_ids:
         raise EngineError("INVALID_RESULT", "search coverage page closure is incomplete", scope="page")

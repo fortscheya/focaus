@@ -12,7 +12,7 @@ import zipfile
 from pathlib import Path
 from unittest import TestCase
 
-from material_engine.common import IdentityAllocator, ResourceStore, content_hash, safe_relative_path
+from material_engine.common import IdentityAllocator, ResourceStore, content_hash, safe_relative_path, text_hash
 from material_engine.engine import MaterialEngine, _draft_from_manifest
 from material_engine.errors import EngineError
 from material_engine.manifest import validate_manifest
@@ -108,6 +108,11 @@ class MaterialEngineTests(TestCase):
         unit = manifest["search_units"][0]
         self.assertEqual(unit["anchor"]["selector"]["kind"], "object")
         self.assertEqual(unit["alternate_anchors"][0]["selector"]["kind"], "material_region")
+        material_selector = unit["alternate_anchors"][0]["selector"]
+        self.assertEqual(material_selector["material_id"], manifest["material_id"])
+        self.assertEqual(material_selector["source_version_id"], manifest["source_version_id"])
+        self.assertEqual(material_selector["parse_version_id"], manifest["parse_version_id"])
+        self.assertEqual(unit["content_hash"], text_hash(unit["display_text"]))
         for resource in manifest["resources"]:
             self.assertTrue((self.root / "stage" / resource["relative_path"]).is_file())
 
@@ -142,6 +147,50 @@ class MaterialEngineTests(TestCase):
         self.assertEqual(result["manifest"]["parent_parse_version_id"], values[2])
         self.assertEqual(source.read_bytes().count(b"before"), 1)
         self.assertEqual(Path(first["manifest_path"]).read_bytes(), old_snapshot_bytes)
+
+    def test_stale_material_correction_is_retained_as_conflict_without_mutating_parent(self):
+        source = self.root / "stale-correction.pdf"
+        make_pdf(source, ["stable"])
+        values, payload = self.payload(source, stage_name="stale-correction")
+        first = self.engine.convert(payload, task_id=values[3])
+        parent_bytes = Path(first["manifest_path"]).read_bytes()
+        object_value = first["manifest"]["objects"][0]
+        region_id = object_value["region_ids"][0]
+        stale_correction = {
+            "correction_id": str(uuid.uuid4()),
+            "source_version_id": values[1],
+            "parse_version_id": values[2],
+            "selector": {
+                "kind": "material_region",
+                "material_id": str(uuid.uuid4()),
+                "source_version_id": values[1],
+                "parse_version_id": values[2],
+                "page_id": first["manifest"]["pages"][0]["page_id"],
+                "region_id": region_id,
+                "bbox": [0, 0, 1, 1],
+                "coordinate_space": "rotated_page_normalized",
+            },
+            "before_hash": content_hash("stable"),
+            "replacement": "changed",
+            "scope": "text",
+            "replay_status": "applied",
+        }
+        values2, reparse = self.payload(source, stage_name="stale-correction-reparse")
+        reparse.update(
+            {
+                "material_id": values[0],
+                "source_version_id": values[1],
+                "parse_version_id": str(uuid.uuid4()),
+                "parent_parse_version_id": values[2],
+                "parent_manifest_handle": str(self.root / "stale-correction" / "snapshots" / (values[2] + ".json")),
+                "corrections": [stale_correction],
+            }
+        )
+        result = self.engine.convert(reparse, task_id=values2[3])
+        self.assertEqual(result["manifest"]["objects"][0]["content"]["runs"][0]["text"], "stable")
+        self.assertEqual(result["manifest"]["corrections_applied"][0]["replay_status"], "conflict")
+        self.assertIn(stale_correction["correction_id"] + ":selector_source_mismatch", result["manifest"]["unresolved_conflicts"])
+        self.assertEqual(Path(first["manifest_path"]).read_bytes(), parent_bytes)
 
     def test_each_page_publication_is_an_immutable_snapshot_with_existing_parent(self):
         source = self.root / "publication-chain.pdf"
@@ -229,6 +278,17 @@ class MaterialEngineTests(TestCase):
         manifest["objects"][0]["source_refs"][0]["selector"]["parse_version_id"] = str(uuid.uuid4())
         with self.assertRaises(EngineError) as error:
             validate_manifest(manifest, self.root / "anchor-closure")
+        self.assertEqual(error.exception.code, "INVALID_RESULT")
+
+    def test_manifest_rejects_search_unit_without_material_anchor(self):
+        source = self.root / "search-anchor-closure.pdf"
+        make_pdf(source, ["page"])
+        values, payload = self.payload(source, stage_name="search-anchor-closure")
+        result = self.engine.convert(payload, task_id=values[3])
+        manifest = json.loads(Path(result["manifest_path"]).read_text())
+        manifest["search_units"][0]["alternate_anchors"] = []
+        with self.assertRaises(EngineError) as error:
+            validate_manifest(manifest, self.root / "search-anchor-closure")
         self.assertEqual(error.exception.code, "INVALID_RESULT")
 
     def test_resume_skips_completed_page_and_retries_remaining_page(self):
