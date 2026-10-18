@@ -1,0 +1,112 @@
+@import './tokens.css';
+
+:root {
+  font-family: Inter, 'Noto Sans SC', 'PingFang SC', sans-serif;
+  color: var(--frame-ink);
+  background: var(--frame-bg);
+  font-synthesis: none;
+}
+
+.slidev-layout {
+  box-sizing: border-box;
+  min-height: 100%;
+  padding: 60px 80px;
+  color: var(--frame-ink);
+  background: var(--frame-bg);
+}
+
+.slidev-layout h1,
+.slidev-layout h2,
+.slidev-layout h3,
+.slidev-layout p {
+  margin: 0;
+}
+
+.frame-cover {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 600px;
+  max-width: 980px;
+}
+
+.frame-eyebrow {
+  margin-bottom: 24px !important;
+  color: var(--frame-accent);
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+.frame-cover h1 {
+  max-width: 900px;
+  font-size: 72px;
+  line-height: 1.08;
+  letter-spacing: -0.04em;
+}
+
+.frame-subtitle {
+  max-width: 760px;
+  margin-top: 28px !important;
+  color: var(--frame-muted);
+  font-size: 28px;
+  line-height: 1.45;
+}
+
+.frame-next-step {
+  display: flex;
+  flex-direction: column;
+  gap: 36px;
+  margin-top: 72px;
+  max-width: 920px;
+}
+
+.frame-next-step > p {
+  max-width: 760px;
+  font-size: 28px;
+  line-height: 1.45;
+}
+
+.frame-next-step-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 24px;
+}
+
+.frame-next-step-grid > div {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 24px;
+  border: 1px solid var(--frame-border);
+  border-radius: var(--frame-radius-card);
+  background: var(--frame-surface);
+}
+
+.frame-next-step-grid strong {
+  color: var(--frame-accent);
+  font-size: 32px;
+}
+
+.frame-next-step-grid span {
+  color: var(--frame-muted);
+  font-size: 20px;
+}
+
+button:focus-visible,
+input:focus-visible,
+[tabindex]:focus-visible {
+  outline: 3px solid var(--frame-accent);
+  outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

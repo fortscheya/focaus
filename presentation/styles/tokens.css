@@ -1,0 +1,57 @@
+:root {
+  --frame-bg: #f8f7f4;
+  --frame-surface: #ffffff;
+  --frame-ink: #20232b;
+  --frame-muted: #5c6372;
+  --frame-accent: #4056d5;
+  --frame-border: #dde1e7;
+  --frame-on-accent: #ffffff;
+  --frame-chart-1: #4056d5;
+  --frame-chart-2: #16867c;
+  --frame-chart-3: #c86d32;
+  --frame-chart-4: #8466bb;
+  --frame-chart-5: #b95172;
+  --frame-chart-6: #997922;
+  --frame-radius-card: 14px;
+  --frame-radius-control: 10px;
+  --frame-space-unit: 8px;
+}
+
+.slidev-layout.frame-night,
+.frame-night .slidev-layout {
+  --frame-bg: #10131d;
+  --frame-surface: #181d2b;
+  --frame-ink: #f5f7fc;
+  --frame-muted: #afb8cc;
+  --frame-accent: #b6a5ff;
+  --frame-border: #333b4f;
+  --frame-on-accent: #10131d;
+  --frame-chart-1: #93a5ff;
+  --frame-chart-2: #64d4b7;
+  --frame-chart-3: #f0a275;
+  --frame-chart-4: #c9a5ff;
+  --frame-chart-5: #ff8faf;
+  --frame-chart-6: #dcc47a;
+}
+
+.slidev-layout.frame-play,
+.frame-play .slidev-layout {
+  --frame-bg: #fff7ea;
+  --frame-surface: #ffffff;
+  --frame-ink: #24232a;
+  --frame-muted: #625d66;
+  --frame-border: #e7dad0;
+  --frame-accent: #4056d5;
+  --frame-on-accent: #ffffff;
+}
+
+.slidev-layout.frame-clay,
+.frame-clay .slidev-layout {
+  --frame-bg: #f6f0e7;
+  --frame-surface: #fffbf4;
+  --frame-ink: #332d27;
+  --frame-muted: #685d56;
+  --frame-border: #e0d4c6;
+  --frame-accent: #aa543a;
+  --frame-on-accent: #ffffff;
+}
