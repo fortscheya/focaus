@@ -1,4 +1,4 @@
-import {useState} from 'react';
+import {useEffect, useState} from 'react';
 import {Button, Card, Description, Input, Label, TextField} from '@heroui/react';
 import type {Course, HostAdapter, Lesson, RecordingSession} from '@focaus/contracts';
 import {RecordingBar} from './RecordingBar.tsx';
@@ -8,6 +8,7 @@ export function NativeWorkspace({
   course,
   lesson,
   recording,
+  contentHeadCount,
   eventSeq,
   snapshotSeq,
   notice,
@@ -23,6 +24,7 @@ export function NativeWorkspace({
   course: Course | null;
   lesson: Lesson | null;
   recording: RecordingSession | null;
+  contentHeadCount: number;
   eventSeq: number;
   snapshotSeq: number;
   notice: string;
@@ -41,15 +43,23 @@ export function NativeWorkspace({
   const [creating, setCreating] = useState(false);
   const bindingLabel = course && lesson ? `${course.name} · ${lesson.title}` : course ? `${course.name} · 尚未创建课堂` : '未归属即时采集';
 
+  useEffect(() => {
+    if (course) setCourseName(course.name);
+  }, [course?.course_id, course?.name]);
+
+  useEffect(() => {
+    if (lesson) setLessonTitle(lesson.title);
+  }, [lesson?.lesson_id, lesson?.title]);
+
   const submit = async () => {
-    if (!courseName.trim() || !lessonTitle.trim()) {
+    if ((!course && !courseName.trim()) || !lessonTitle.trim()) {
       setFormError('课程名称和课堂标题都需要由用户明确填写。');
       return;
     }
     setFormError('');
     setCreating(true);
     try {
-      await onCreateCourseLesson(courseName.trim(), lessonTitle.trim());
+      await onCreateCourseLesson(courseName.trim() || course?.name || '', lessonTitle.trim());
     } finally {
       setCreating(false);
     }
@@ -92,7 +102,7 @@ export function NativeWorkspace({
           <RecordingBar state={recording?.state ?? 'stopped'} elapsedMs={recording?.durable_watermark_ms ?? 0} watermarkMs={recording?.durable_watermark_ms ?? 0} assignmentEpoch={recording?.assignment_epoch ?? 0} bindingLabel={bindingLabel} onToggle={onToggleRecording} onStop={onStopRecording} />
           {notice ? <div className="inline-notice" role="status">{notice}</div> : null}
           <div className="native-content-grid" aria-label="真实宿主内容状态">
-            {['课堂笔记', '原始转写', '二次转写', '课件', 'focaus', '交互知识组件'].map((label) => <Card key={label} className="native-empty-card" variant="secondary"><Card.Header><Card.Title>{label}</Card.Title><Card.Description>等待宿主 content.get / snapshot 返回</Card.Description></Card.Header><Card.Content><div className="native-empty-icon" aria-hidden="true">·</div><p>当前没有可安全展示的真实内容。此 native 壳不会使用 fixture 正文、搜索命中或模型结果。</p></Card.Content></Card>)}
+            {['课堂笔记', '原始转写', '二次转写', '课件', 'focaus', '交互知识组件'].map((label) => <Card key={label} className="native-empty-card" variant="secondary"><Card.Header><Card.Title>{label}</Card.Title><Card.Description>宿主 content heads：{contentHeadCount} · 等待对应投影</Card.Description></Card.Header><Card.Content><div className="native-empty-icon" aria-hidden="true">·</div><p>当前没有可安全展示的真实内容。此 native 壳不会使用 fixture 正文、搜索命中或模型结果。</p></Card.Content></Card>)}
           </div>
           {!lesson ? <div className="native-empty-action"><Button onPress={onBack}>返回创建课堂</Button></div> : null}
         </main>

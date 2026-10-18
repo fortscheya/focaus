@@ -115,6 +115,7 @@ export function App() {
   const [course, setCourse] = useState<Course | null>(null);
   const [lesson, setLesson] = useState<Lesson | null>(null);
   const [recordingSession, setRecordingSession] = useState<RecordingSession | null>(null);
+  const [nativeContentHeads, setNativeContentHeads] = useState<Record<string, unknown>>({});
   const [selectedViewId, setSelectedViewId] = useState(workspaceViews[0].id);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchNotice, setSearchNotice] = useState('');
@@ -132,6 +133,7 @@ export function App() {
   const courseRef = useRef<Course | null>(null);
   const lessonRef = useRef<Lesson | null>(null);
   const recordingRef = useRef<RecordingSession | null>(null);
+  const contentHeadsRef = useRef<Record<string, unknown>>({});
 
   useEffect(() => { courseRef.current = course; }, [course]);
   useEffect(() => { lessonRef.current = lesson; }, [lesson]);
@@ -166,6 +168,10 @@ export function App() {
             lessonRef.current = null;
             setLesson(null);
           }
+          if (event.event_type.startsWith('content.')) {
+            delete contentHeadsRef.current[event.entity_id];
+            setNativeContentHeads({...contentHeadsRef.current});
+          }
           continue;
         }
         const response = await activeRuntime.adapter.invoke('content.get', {entity_id: event.entity_id, revision_id: event.revision_id, selector: null}, makeEnvelope('content.get'));
@@ -186,6 +192,9 @@ export function App() {
           if (!nextLesson) throw new Error(`事件 ${event.event_type} 的 content.get 未返回合法 Lesson`);
           lessonRef.current = nextLesson;
           setLesson(nextLesson);
+        } else if (event.event_type.startsWith('content.')) {
+          contentHeadsRef.current[event.entity_id] = response.result;
+          setNativeContentHeads({...contentHeadsRef.current});
         }
       }
       const ack = await activeRuntime.adapter.invoke('state.ack', {subscription_id: activeRuntime.state.subscription_id, upto_seq: nextBatch.through_seq}, makeEnvelope('state.ack'));
@@ -202,7 +211,6 @@ export function App() {
   const handleEventBatch = useCallback((batch: EventBatch) => {
     if (!nativeRuntimeRef.current) {
       pendingEventBatches.current.push(batch);
-      setEventSeq(batch.through_seq);
       return;
     }
     if (nativeEventQueue.current.blocked) {
@@ -249,6 +257,8 @@ export function App() {
         courseRef.current = library.course;
         lessonRef.current = library.lesson;
         recordingRef.current = library.recording;
+        contentHeadsRef.current = {};
+        setNativeContentHeads({});
         setCourse(library.course);
         setLesson(library.lesson);
         setRecordingSession(library.recording);
@@ -299,32 +309,43 @@ export function App() {
 
   const createCourseLesson = async (courseName: string, lessonTitle: string) => {
     if (runtime?.mode !== 'native') return;
-    setNativeNotice('正在提交 course.create；课程 ID 与 revision 只采用宿主响应。');
-    const courseResponse = await invoke('course.create', {name: courseName}, {});
-    if (courseResponse.status === 'error') {
-      setNativeNotice(`真实宿主拒绝 course.create：${courseResponse.error?.message ?? courseResponse.error?.code ?? 'unknown error'}`);
-      return;
+    try {
+      let confirmedCourse = courseRef.current ?? course;
+      if (!confirmedCourse) {
+        setNativeNotice('正在提交 course.create；课程 ID 与 revision 只采用宿主响应。');
+        const courseResponse = await invoke('course.create', {name: courseName}, {});
+        if (courseResponse.status === 'error') {
+          setNativeNotice(`真实宿主拒绝 course.create：${courseResponse.error?.message ?? courseResponse.error?.code ?? 'unknown error'}`);
+          return;
+        }
+        confirmedCourse = parseCourseResponse(courseResponse.result);
+        if (!confirmedCourse) {
+          setNativeNotice('course.create 返回缺少合法 Course；没有本地补造课程。');
+          return;
+        }
+        courseRef.current = confirmedCourse;
+        setCourse(confirmedCourse);
+      } else {
+        setNativeNotice('已复用宿主确认的 course_id，正在提交 lesson.create；不会重复创建课程。');
+      }
+      setNativeNotice('课程已确认，正在提交 lesson.create。');
+      const lessonResponse = await invoke('lesson.create', {course_id: confirmedCourse.course_id, title: lessonTitle, actual_date: null, timezone: 'Asia/Shanghai'}, {});
+      if (lessonResponse.status === 'error') {
+        setNativeNotice(`真实宿主拒绝 lesson.create：${lessonResponse.error?.message ?? lessonResponse.error?.code ?? 'unknown error'}`);
+        return;
+      }
+      const createdLesson = parseLessonResponse(lessonResponse.result);
+      if (!createdLesson) {
+        setNativeNotice('lesson.create 返回缺少合法 Lesson；保留已确认课程，不补造课堂。');
+        return;
+      }
+      lessonRef.current = createdLesson;
+      setLesson(createdLesson);
+      setScreen('workspace');
+      setNativeNotice('课程与课堂均已由宿主确认；现在可以提交 recording.start。');
+    } catch (error) {
+      setNativeNotice(`课程/课堂创建失败：${safeHostErrorMessage(error)}`);
     }
-    const createdCourse = parseCourseResponse(courseResponse.result);
-    if (!createdCourse) {
-      setNativeNotice('course.create 返回缺少合法 Course；没有本地补造课程。');
-      return;
-    }
-    setCourse(createdCourse);
-    setNativeNotice('course.create 已确认，正在提交 lesson.create。');
-    const lessonResponse = await invoke('lesson.create', {course_id: createdCourse.course_id, title: lessonTitle, actual_date: null, timezone: 'Asia/Shanghai'}, {});
-    if (lessonResponse.status === 'error') {
-      setNativeNotice(`真实宿主拒绝 lesson.create：${lessonResponse.error?.message ?? lessonResponse.error?.code ?? 'unknown error'}`);
-      return;
-    }
-    const createdLesson = parseLessonResponse(lessonResponse.result);
-    if (!createdLesson) {
-      setNativeNotice('lesson.create 返回缺少合法 Lesson；保留已确认课程，不补造课堂。');
-      return;
-    }
-    setLesson(createdLesson);
-    setScreen('workspace');
-    setNativeNotice('课程与课堂均已由宿主确认；现在可以提交 recording.start。');
   };
 
   const startRecording = async () => {
@@ -456,7 +477,7 @@ export function App() {
   const snapshotSeq = isNativeRuntime ? activeRuntime.state.snapshot_seq : 0;
 
   if (isNativeRuntime) {
-    return <NativeWorkspace course={course} lesson={lesson} recording={recordingSession} eventSeq={eventSeq} snapshotSeq={snapshotSeq} notice={nativeNotice} screen={screen} onCreateCourseLesson={createCourseLesson} onOpenWorkspace={() => setScreen('workspace')} onBack={() => setScreen('home')} onToggleRecording={() => void toggleRecording()} onStopRecording={() => void stopRecording()} onStartUnassigned={() => void startRecording()} onRetryEvents={retryNativeEvents} />;
+    return <NativeWorkspace course={course} lesson={lesson} recording={recordingSession} contentHeadCount={Object.keys(nativeContentHeads).length} eventSeq={eventSeq} snapshotSeq={snapshotSeq} notice={nativeNotice} screen={screen} onCreateCourseLesson={createCourseLesson} onOpenWorkspace={() => setScreen('workspace')} onBack={() => setScreen('home')} onToggleRecording={() => void toggleRecording()} onStopRecording={() => void stopRecording()} onStartUnassigned={() => void startRecording()} onRetryEvents={retryNativeEvents} />;
   }
 
   return (
