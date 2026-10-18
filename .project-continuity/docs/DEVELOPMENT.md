@@ -52,3 +52,10 @@ C向F/N下发物理接线：focaus_bootstrap返回宿主window_id/contract_versi
 - C初审在途N IPC发现非变更ok响应缺committed_revisions；已请求修正并按CommandResult验证真实响应。A时间映射需覆盖gap与begin/end端点，已交独立边界检查。
 - U02局部真实证据：ffmpeg9.0.1分别对两份qta轨0 AAC完整decode-to-null，输出时间1275371667us/6140310000us且退出0；轨1 APAC均因无decoder退出234。未保存音频、未混轨，尚无试听/主轨选择/课堂内容关联。evaluation/asset-decode.json记录精确源hash和结果。
 - D171已收到真实课件路径；L08/L09原始PDF元数据登记evaluation/courseware-assets.json，E已获限定本地提取任务，派生只入其忽略.local。
+
+## G2 Integration Evidence (2026-10-18)
+- 整合N 05e4e97→c34fcef、F a6df009→6db6188、A e8ef477→ee5f50b、E 6442697→fde9518；逐路限定目录复核。C公共接线4e8452d/native_flow149b116及A依赖锁5b30910。
+- C使用相同NativeHost/SQLite/wire建立双窗口、ACK/事件读取、幂等、身份拒绝与重启恢复集成；cargo workspace test及native-shell check通过，未开启真实设备。Python11/TS37+hash/generator一致性通过，E4项通过。
+- F正在收紧native渲染和宿主真实ID/补读后ACK；N真实搜索/两阶段视图在途；A transport安全边界加固及真实协议核对；E路径/恢复/完整性边界。各阶段提交不等于G2或产品验收完成。
+- E真实课件deep：L08 82页，67 complete/15 partial，text63/table4/formula13/image2，92 search units，23.39s；L09 86页，76 complete/10 partial，text76/formula8/image2，84 units，22.71s。两份2页图像回退，搜索覆盖partial；light分别80/84 basic_ready和2 partial。manifest通过公共语义校验，原件/派生未上传或纳管。
+- 真实课程质量、课件与qta内容对齐、真实云、macOS设备和长录音未验证。Rustfmt未安装，未宣称格式检查通过。

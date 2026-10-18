@@ -2,6 +2,8 @@
 # Issues
 
 ## Open
+- I33［实际本地抽取限制］L08/L09各2页无可用文字层，搜索覆盖partial；deep公式为候选，未证明复杂图表/公式语义重构。具体统计见docs/DEVELOPMENT.md，后续N托管/索引和F原文定位尚待接通。
+- I34［运行验收缺口］Tauri native-shell编译和真实NativeHost双窗口集成已通过，macOS实际窗口/权限/设备/长录音未测；F首批fixture展示不算native产品链，正在分离。
 - I32［本地资产验证］ffmpeg9.0.1可将两份qta AAC轨独立全程解码到null；APAC均明确no decoder found，属此工具解码能力缺口，不能认定原件损坏/无收益。未试听、选轨或内容对齐；后续可测Apple本机解码能力，原件保留。
 - I30［工具/启动差异］create_thread的worktree路径由创建操作分配，创建前无法可靠给出实际路径；总控采用两步派发：先在真正worktree创建核验/等待消息，再读取实际threadId/path/branch/SHA后下发替换完7.2–7.5的完整实施提示词，未下发前禁止产品写入。不创建同目录替代对话，不伪造路径或threadId。
 - I31［本地整合授权已获，云授权待具体范围］D170已允许本项目本地merge/cherry-pick与契约同步。真实云调用/资料上传和费用仍待具体数据/用途/服务/费用边界授权。
@@ -34,7 +36,7 @@
 - I26［多窗/转移规则已决，未验证］D151–D152确认整次纠正归属/跨堂结束新开、满六格腾位或独立窗；D156确认两层转写迁移/保引用、课件笔记不搬/受影响标可更新。迁移草稿/光标/引用/输入法状态与重整保护未测，无标签/视图不停止任务继续。
 - I27［用户指定模型，接口已核对/性能未测］D150的decision-model-preview官方契约已由主agent复核：文本state+typed questions，choice至多255（需自设other）、上下文65536 token/每次至多16问；北京/新加坡System One接口。文档可表达选页，不证明课堂准确性/约10秒端到端；长课件候选覆盖/失配与刷新抖动待测。见docs/CATCHUP-MODELS.md，worker已关闭，无API调用。
 - I28［双ASR官方契约已核对，衔接未测］D154双型号已选；总览/HTTP API确认filetrans异步/URL输入/12小时2GB/句词毫秒时间戳/热词与有限上下文，SDK上下文与临时URL有差异。实际上传/长连接恢复/边界重复漏句/时间映射及性能待测，不据型号名宣称更准/已接通。辅助检索未完成已关闭，由主agent直接完成核对，无音频/API调用。
-- I2［Git前置已解除，隔离建立中］2026-10-18用户D168允许初始化；G0已提交3312e4e，list_projects读回Git=true，workspace_hygiene clean。G1实现与验证通过，提交后再建四worktree；D170已授权本地merge/cherry-pick。
+- I2［Git前置已解除，隔离已建立］2026-10-18用户D168允许初始化；G0已提交3312e4e，list_projects读回Git=true，workspace_hygiene clean。G1 d9a8cdf6已提交，四真实worktree/分支已建立；D170已授权本地merge/cherry-pick。
 
 ## Resolved
 - I1［需求访谈已确认完成］2026-10-17用户Q127接受完整共同理解、qwen3.8-flash角色与1总控4开发（D157）；grilling完成。D160工程文档已编写，产品性能问题仍未实施/验证。

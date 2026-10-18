@@ -1,17 +1,18 @@
 # Active Context
 
 ## Current Task
-- 2026-10-18 D167/D168：总控开始后续开发，Git初始化已授权；不重开访谈、不重写七工程文档。
-- G0已提交3312e4e；G1机器契约/迁移/fixtures已通过相关验证，共同提交d9a8cdf6，4路已创建并下发实施任务，均请求gpt-6.1-sol/max。
-- 总控thread：01a14cae-d8ce-7053-bd12-737ea1bef020，host local；项目f2e92149-ba53-44f1-87ed-848b34650309。
+- 2026-10-18：总控推进G2可靠本地链；G0 3312e4e/G1 d9a8cdf6已完成，四个独立持久对话均已运行，不重新创建。
+- 总控01a14cae-d8ce-7053-bd12-737ea1bef020 / local，主分支codex/focaus-integration；四路真实ID/path/分支见docs/DEVELOPMENT.md。
+- 主continuity仅C写；互斥目录与C01–C09所有权继续。D170允许本地cherry-pick/merge及契约同步，不含push/rebase/发布/删除。
 
-## References / Authority
-- docs/engineering/README.md及六正文已读取；产品基线已确认，D162–D164继续。
-- contract 2.0.0 / focaus.material 2.0.0 / focaus.visualization 1.0.0；C01–C09、V01–V26、U01–U14。
-- 主continuity仅C写；各worktree只读快照，互斥写入目录见PARALLEL_DELIVERY。当前实施登记见docs/DEVELOPMENT.md。
+## Current Evidence
+- 主分支已整合N存储/采集/IPC、F首批UI、A流程/transport、E资料sidecar；至fde9518。F native无fixture污染/事件ACK修复、N搜索/视图移交、A transport加固、E恢复边界在各worktree继续。
+- C真实NativeHost/SQLite双窗口集成测试通过：幂等、快照/ACK后事件、content.get、重启恢复、不自动采集。Tauri native-shell编译通过；尚未实际macOS窗口/麦克风验收。
+- Rust workspace测试、Python11项契约、TS37结构例/RFC8785、生成一致性通过；A25项与E4项通过。模块/合成fixture不等于产品验收。
+- 用户提供/Users/pitr/Desktop/SKD/DeepLearning；E完成L08/L09真实PDF light/deep本地抽取，82/86页，均partial搜索覆盖；原件/派生未纳管或上传。
+- 两qta AAC完整decode-to-null通过；APAC因ffmpeg缺decoder失败，未试听/选轨/绑定L8/L9，不认定原件损坏。
 
-## Observed / Next
-- list_projects与git检查均确认开始时非Git。工具声明本机支持gpt-6.1-sol/max；四路真实ID/路径见docs/DEVELOPMENT.md；创建已接受，运行配置字段未独立读回。
-- 没有产品实测；Rust1.99.1已隔离安装至.local，Python/TS/Rust契约及迁移验证、桌面占位构建通过。
-- 下一步：C准备Tauri接线和集成验证、跟踪四路首批成果；D170已授权本地merge/cherry-pick整合与契约同步。
-- 云调用/上传/费用需单独核对授权，凭据只经后续安全存储解析；当前未读取/验证密钥。
+## Next
+- 复核并整合F/A/N下一批精确diff及测试；实际运行macOS App，先空库/创建/重启/键盘/后台生命周期，再明确采集与云验收边界。
+- N接E资料入库/索引；C补真实纵向集成。契约2.0.0/material2.0.0/visualization1.0.0保持。
+- 真实云/上传/费用仍待具体授权。四专用槽位；不读/输出密钥。指定模型不换。grilling不重开。
