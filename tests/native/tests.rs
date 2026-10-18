@@ -1477,7 +1477,36 @@ fn native_material_acceptance_publishes_local_manifest_and_rejects_stale_inputs(
             "unresolved_conflicts":[],
             "provenance":{},
             "completion":"complete",
-            "search_units":[],
+            "search_units":[{
+                "unit_key":"local-material-text",
+                "owner_entity_id":object_id,
+                "revision_id":object_revision,
+                "content_hash":search_text_hash("local material"),
+                "display_text":"local material",
+                "field_path":"/content/runs",
+                "anchor":{
+                    "owner_entity_id":object_id,
+                    "revision_id":object_revision,
+                    "selector":{
+                        "kind":"material_region",
+                        "material_id":material_id,
+                        "source_version_id":source_version_id,
+                        "parse_version_id":parse_version_id,
+                        "page_id":page_id,
+                        "region_id":region_id,
+                        "bbox":[0.,0.,1.,1.],
+                        "coordinate_space":"rotated_page_normalized"
+                    },
+                    "field_path":"/content/runs",
+                    "scalar_range":{"start":0,"end":14},
+                    "audio_spans":[],
+                    "fallback":null
+                },
+                "equivalence_group_id":null,
+                "alternate_anchors":[],
+                "source_role":"material_supplement",
+                "extraction_version":"1.0.0"
+            }],
             "search_coverage":{
                 "requested_pages":[page_id],
                 "processed_pages":[page_id],
@@ -1548,6 +1577,260 @@ fn native_material_acceptance_publishes_local_manifest_and_rejects_stale_inputs(
     assert_eq!(content["format_version"], "2.0.0");
     assert_eq!(host.accept_material_result(input.clone()).unwrap()["duplicate"], true);
 
+    let window = storage::id();
+    host.bind_window(
+        "main",
+        &window,
+        vec![serde_json::from_value(json!({"kind":"global"})).unwrap()],
+    )
+    .unwrap();
+    let content = host
+        .dispatch_webview(
+            "main",
+            command(
+                "content.get",
+                &window,
+                json!({
+                    "entity_id":job.material_id,
+                    "revision_id":job.parse_version_id,
+                    "selector":null
+                }),
+            ),
+        )
+        .unwrap();
+    validate("MaterialManifest", &json!(content.result.as_ref().unwrap())).unwrap();
+
+    let opened = host
+        .dispatch_webview(
+            "main",
+            command(
+                "view.open",
+                &window,
+                json!({
+                    "lesson_id":lesson_id,
+                    "target":{
+                        "kind":"entity",
+                        "entity_id":job.material_id,
+                        "revision_id":null,
+                        "selector":null
+                    },
+                    "placement":"grid"
+                }),
+            ),
+        )
+        .unwrap();
+    let view: ContentView = serde_json::from_value(opened.result.unwrap()).unwrap();
+    let opened_search = host
+        .dispatch_webview(
+            "main",
+            command(
+                "search.open",
+                &window,
+                json!({
+                    "view_id":view.view_id,
+                    "target":view.target,
+                    "version_mode":"current",
+                    "actual_visible_tier":null,
+                    "revision_ids":[]
+                }),
+            ),
+        )
+        .unwrap();
+    let session: SearchSession = serde_json::from_value(opened_search.result.unwrap()).unwrap();
+    assert!(session.scope.target_ids.contains(&job.material_id));
+    let queried = host
+        .dispatch_webview(
+            "main",
+            command(
+                "search.query",
+                &window,
+                json!({
+                    "search_id":session.search_id,
+                    "query_seq":1,
+                    "query":"material",
+                    "case_sensitive":false
+                }),
+            ),
+        )
+        .unwrap();
+    let query_task: Task = serde_json::from_value(queried.result.unwrap()).unwrap();
+    assert_eq!(query_task.state, TaskState::Succeeded);
+    let page_result = host
+        .dispatch_webview(
+            "main",
+            command(
+                "search.page",
+                &window,
+                json!({
+                    "search_id":session.search_id,
+                    "query_seq":1,
+                    "scope_snapshot_id":session.scope_snapshot_id,
+                    "cursor":null
+                }),
+            ),
+        )
+        .unwrap();
+    let page: SearchPage = serde_json::from_value(page_result.result.unwrap()).unwrap();
+    validate("SearchPage", &json!(page)).unwrap();
+    assert_eq!(page.total_count, 1);
+    assert_eq!(page.hits.len(), 1);
+    assert_eq!(page.count_status, SearchPageCountStatus::Exact);
+    assert_eq!(page.coverage.state, SearchCoverageState::Complete);
+    assert_eq!(page.coverage.indexed_units, 1);
+    assert!(page
+        .coverage
+        .required_pages
+        .contains(&input.manifest.pages[0].page_id));
+    assert!(page.index_generation > 0);
+    assert_eq!(page.visibility_epoch, session.visibility_epoch);
+    let hit = page.hits[0].clone();
+    let object_id = hit.matched_anchor.owner_entity_id.clone();
+    assert_ne!(object_id, job.material_id);
+    assert_eq!(hit.nav_kind, SearchHitNavKind::PageRegion);
+    assert_eq!(hit.matched_anchor.scalar_range, ScalarRange { start: 6, end: 14 });
+    let located_result = host
+        .dispatch_webview(
+            "main",
+            command(
+                "search.locate",
+                &window,
+                json!({
+                    "search_id":session.search_id,
+                    "view_id":view.view_id,
+                    "hit_id":hit.hit_id,
+                    "expected_revision":hit.revision_id
+                }),
+            ),
+        )
+        .unwrap();
+    let located: SearchAnchor = serde_json::from_value(located_result.result.unwrap()).unwrap();
+    assert_eq!(located, hit.matched_anchor);
+
+    let from_revision = storage::id();
+    let from_selector = Selector::V3(ObjectSelector {
+        kind: "object".into(),
+        object_id: object_id.clone(),
+        element_ids: Vec::new(),
+    });
+    let edge = SourceEdge {
+        edge_id: storage::id(),
+        from_entity_id: object_id.clone(),
+        from_revision_id: from_revision.clone(),
+        from_selector: from_selector.clone(),
+        to: source.clone(),
+        role: SourceEdgeRole::MaterialSupplement,
+        created_by: SourceEdgeCreatedBy::Engine,
+        snapshot_id: storage::id(),
+        availability: SourceEdgeAvailability::Available,
+        freshness: SourceEdgeFreshness::Current,
+    };
+    db.store
+        .write(|t| {
+            let mut object = storage::head(t, &object_id)?;
+            object["source_edges"] = json!([edge.clone()]);
+            storage::commit_version(
+                t,
+                &object_id,
+                "material_object",
+                &from_revision,
+                object,
+                "material.page_ready",
+                json!({"kind":"entity","entity_id":job.material_id}),
+                None,
+                None,
+            )?;
+            t.execute(
+                "INSERT INTO source_edges VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+                params![
+                    edge.edge_id,
+                    edge.from_entity_id,
+                    edge.from_revision_id,
+                    storage::encode(&edge.from_selector)?,
+                    edge.to.entity_id,
+                    edge.to.revision_id,
+                    storage::encode(&edge.to)?,
+                    storage::value(&edge.role)?.as_str().unwrap(),
+                    storage::value(&edge.availability)?.as_str().unwrap(),
+                    storage::value(&edge.freshness)?.as_str().unwrap(),
+                    edge.snapshot_id
+                ],
+            )
+            .map_err(storage::sql_error)?;
+            Ok(())
+        })
+        .unwrap();
+    let source_input = json!({
+        "edge_id":edge.edge_id,
+        "return_anchor":from_selector
+    });
+    let resolved = host
+        .dispatch_webview("main", command("source.resolve", &window, source_input.clone()))
+        .unwrap();
+    let resolved = resolved.result.unwrap();
+    assert_eq!(resolved["resolved_source"]["entity_id"], job.material_id);
+    assert_eq!(resolved["edge"]["availability"], "available");
+    assert_eq!(resolved["edge"]["freshness"], "current");
+    assert_eq!(resolved["traversed_edges"][0], edge.edge_id);
+    assert!(resolved["skipped_layers"].as_array().unwrap().is_empty());
+
+    db.store
+        .write(|t| {
+            t.execute(
+                "UPDATE source_edges SET freshness='update_available' WHERE edge_id=?1",
+                [&edge.edge_id],
+            )
+            .map_err(storage::sql_error)?;
+            Ok(())
+        })
+        .unwrap();
+    let projected = host
+        .dispatch_webview("main", command("source.resolve", &window, source_input.clone()))
+        .unwrap();
+    assert_eq!(
+        projected.result.unwrap()["edge"]["freshness"],
+        "update_available"
+    );
+    let denied = host
+        .dispatch_webview(
+            "main",
+            command(
+                "source.resolve",
+                &window,
+                json!({
+                    "edge_id":edge.edge_id,
+                    "return_anchor":{"kind":"whole"}
+                }),
+            ),
+        )
+        .unwrap_err();
+    assert_eq!(denied.code, ErrorCode::PermissionDenied);
+
+    let stale_hash = "0".repeat(64);
+    db.store
+        .write(|t| {
+            t.execute(
+                "UPDATE resources SET sha256=?1 WHERE resource_id=(SELECT resource_id FROM materials WHERE material_id=?2)",
+                params![stale_hash, job.material_id],
+            )
+            .map_err(storage::sql_error)?;
+            Ok(())
+        })
+        .unwrap();
+    let stale_source = host
+        .dispatch_webview("main", command("source.resolve", &window, source_input.clone()))
+        .unwrap_err();
+    assert_eq!(stale_source.code, ErrorCode::StaleInput);
+    db.store
+        .write(|t| {
+            t.execute(
+                "UPDATE resources SET sha256=?1 WHERE resource_id=(SELECT resource_id FROM materials WHERE material_id=?2)",
+                params![source.content_hash, job.material_id],
+            )
+            .map_err(storage::sql_error)?;
+            Ok(())
+        })
+        .unwrap();
+
     let mut wrong_source = input.manifest.clone();
     wrong_source.parse_version_id = storage::id();
     wrong_source.source_hash = "0".repeat(64);
@@ -1573,6 +1856,74 @@ fn native_material_acceptance_publishes_local_manifest_and_rejects_stale_inputs(
         .code,
         ErrorCode::StaleInput
     );
+
+    db.store
+        .write(|t| {
+            t.execute(
+                "UPDATE entities SET lifecycle='deleted' WHERE entity_id=?1",
+                [&job.material_id],
+            )
+            .map_err(storage::sql_error)?;
+            Ok(())
+        })
+        .unwrap();
+    let deleted_source = host
+        .dispatch_webview("main", command("source.resolve", &window, source_input))
+        .unwrap_err();
+    assert_eq!(deleted_source.code, ErrorCode::SourceDeleted);
+    let deleted_content = host
+        .dispatch_webview(
+            "main",
+            command(
+                "content.get",
+                &window,
+                json!({
+                    "entity_id":job.material_id,
+                    "revision_id":job.parse_version_id,
+                    "selector":null
+                }),
+            ),
+        )
+        .unwrap_err();
+    assert_eq!(deleted_content.code, ErrorCode::SourceDeleted);
+    let deleted_page = host
+        .dispatch_webview(
+            "main",
+            command(
+                "search.page",
+                &window,
+                json!({
+                    "search_id":session.search_id,
+                    "query_seq":1,
+                    "scope_snapshot_id":session.scope_snapshot_id,
+                    "cursor":null
+                }),
+            ),
+        )
+        .unwrap_err();
+    assert!(matches!(
+        deleted_page.code,
+        ErrorCode::SearchInvalidated | ErrorCode::SourceDeleted
+    ));
+    let deleted_locate = host
+        .dispatch_webview(
+            "main",
+            command(
+                "search.locate",
+                &window,
+                json!({
+                    "search_id":session.search_id,
+                    "view_id":view.view_id,
+                    "hit_id":hit.hit_id,
+                    "expected_revision":hit.revision_id
+                }),
+            ),
+        )
+        .unwrap_err();
+    assert!(matches!(
+        deleted_locate.code,
+        ErrorCode::SearchInvalidated | ErrorCode::SourceDeleted
+    ));
 }
 
 #[test]
