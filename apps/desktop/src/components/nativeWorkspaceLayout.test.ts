@@ -12,7 +12,8 @@ const projection = (key: string, kind: NativeProjection['kind']): NativeProjecti
 describe('native workspace pane layout', () => {
   it('keeps native empty state honest and actionable without inventing views', () => {
     const slots = buildNativePaneSlots([], {}, null);
-    expect(slots.map((slot) => slot.title)).toEqual(['当前课堂内容', '转写与笔记', '课件与资料']);
+    expect(slots).toHaveLength(6);
+    expect(slots.map((slot) => slot.title)).toEqual(['笔记', '原始转写', '二次转写', '课件与资料', '课堂问答', '安排与提醒']);
     expect(slots.filter((slot) => slot.view !== null)).toHaveLength(0);
     expect(slots.filter((slot) => slot.primary)).toHaveLength(1);
   });

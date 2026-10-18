@@ -5,6 +5,7 @@ import {ids} from '../app/fixtures.ts';
 import {makeEnvelope} from '../app/hostAdapter.ts';
 import {parseEvaluationResult, type Conv2dParameters, type FixtureEvaluation} from './math.ts';
 import {StatusBadge} from '../components/StatusBadge.tsx';
+import {visualizationMotionMode} from './motion.ts';
 
 const initialParameters: Conv2dParameters = {
   operator_dimension: 2,
@@ -146,6 +147,7 @@ export function VisualizationPanel({adapter}: {adapter: HostAdapter}) {
   const initialRun = useRef(false);
   const interactionSeqRef = useRef(0);
   const latestEvaluationSeq = useRef(0);
+  const motionMode = visualizationMotionMode(isReducedMotion, isVisible);
 
   useEffect(() => {
     const media = window.matchMedia('(prefers-reduced-motion: reduce)');
@@ -229,7 +231,7 @@ export function VisualizationPanel({adapter}: {adapter: HostAdapter}) {
   const kernelValues = parameters.kernel[0]?.flat() ?? [];
 
   return (
-    <section className="visualization-panel" aria-labelledby="visualization-title" data-anchor="anchor-visualization">
+    <section className="visualization-panel" aria-labelledby="visualization-title" data-anchor="anchor-visualization" data-motion-mode={motionMode}>
       <div className="panel-heading-row">
         <div>
           <p className="eyebrow">focaus.visualization · 1.0.0</p>
@@ -248,7 +250,7 @@ export function VisualizationPanel({adapter}: {adapter: HostAdapter}) {
         <span className="fixture-label">fixture adapter · 由确定性 N 替身返回数据</span>
         <span>画面不会自行推断数学结果；参数 hash、shape、逐格步骤来自 visualization.evaluate。</span>
         <span>interaction_seq：{interactionSeq}</span>
-        <span>{isReducedMotion ? '已启用 reduced motion：不自动播放。' : '无自动播放；每一步都可用键盘/按钮选择。'}</span>
+        <span>{motionMode === 'paused' ? (isReducedMotion ? '已启用 reduced motion：不自动播放。' : '当前承载离屏：暂停动态效果。') : '无自动播放；每一步都可用键盘/按钮选择。'}</span>
       </div>
       {error ? <div className="error-notice" role="alert">{error}</div> : null}
       <div className="visualization-layout">

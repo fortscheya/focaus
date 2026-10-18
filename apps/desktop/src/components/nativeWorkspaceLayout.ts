@@ -20,6 +20,20 @@ const labels: Record<string, string> = {
   arrangements: '安排与提醒',
 };
 
+const emptyKinds = ['note', 'raw', 'secondary', 'material', 'qa', 'arrangements'] as const;
+
+function emptySlot(kind: string, primary: boolean): NativePaneSlot {
+  return {
+    id: 'native-empty-' + kind,
+    title: labels[kind] ?? '内容窗',
+    description: '等待宿主返回 ' + (labels[kind] ?? '内容') + ' projection',
+    state: 'empty',
+    view: null,
+    projection: null,
+    primary,
+  };
+}
+
 function contentKind(view: ContentView): string {
   return view.target.kind === 'lesson_collection' ? view.target.content_kind : 'entity';
 }
@@ -38,15 +52,11 @@ export function buildNativePaneSlots(
 ): NativePaneSlot[] {
   const openViews = views.filter((view) => view.state !== 'closed').slice(0, 6);
   if (!openViews.length) {
-    return [
-      {id: 'native-empty-primary', title: '当前课堂内容', description: '等待宿主返回真实 ContentView', state: 'empty', view: null, projection: null, primary: true},
-      {id: 'native-empty-transcript', title: '转写与笔记', description: '原始、二次与笔记由真实 projection 提供', state: 'empty', view: null, projection: null, primary: false},
-      {id: 'native-empty-material', title: '课件与资料', description: '资料导入后由宿主 content head 返回', state: 'empty', view: null, projection: null, primary: false},
-    ];
+    return emptyKinds.map((kind, index) => emptySlot(kind, index === 0));
   }
   const activeIndex = activeView ? openViews.findIndex((view) => view.view_id === activeView.view_id) : -1;
   const ordered = activeIndex > 0 ? [openViews[activeIndex], ...openViews.slice(0, activeIndex), ...openViews.slice(activeIndex + 1)] : openViews;
-  return ordered.map((view, index) => {
+  const actualSlots = ordered.map((view, index) => {
     const kind = contentKind(view);
     const title = labels[kind] ?? (kind === 'entity' ? '内容对象' : kind);
     return {
@@ -59,4 +69,6 @@ export function buildNativePaneSlots(
       primary: index === 0,
     };
   });
+  const usedKinds = new Set(ordered.map(contentKind));
+  return [...actualSlots, ...emptyKinds.filter((kind) => !usedKinds.has(kind)).slice(0, 6 - actualSlots.length).map((kind) => emptySlot(kind, false))];
 }
