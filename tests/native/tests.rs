@@ -390,6 +390,192 @@ fn independent_math_golden_and_rectangular_multichannel_case() {
     input.parameters["stride"] = json!([0, 1]);
     assert!(visualizations::evaluate_template("conv2d_spatial", &input).is_err());
 }
+
+#[test]
+fn visualization_evaluate_uses_persisted_row_revision_and_bounded_determinism() {
+    let db = TestLibrary::new();
+    let lesson_id = lesson(&db.store);
+    let note_id = note(&db.store, &lesson_id, "visualization owner");
+    let object_id = storage::id();
+    let revision_id = storage::id();
+    let parameters = json!({
+        "operator_dimension":2,
+        "scene_dimension":3,
+        "operator_semantics":"cross_correlation",
+        "axis_order":"CHW",
+        "input":[[[1,2],[3,4]]],
+        "kernel":[[[1]]],
+        "stride":[1,1],
+        "padding":[0,0,0,0],
+        "dilation":[1,1],
+        "bias":0
+    });
+    let content: VisualizationContent = serde_json::from_value(json!({
+        "object_id":object_id,
+        "revision_id":revision_id,
+        "parent_revision_ids":[],
+        "protocol":"focaus.visualization",
+        "protocol_version":"1.0.0",
+        "template_id":"conv2d_spatial",
+        "template_version":"1.0.0",
+        "registry_revision":"1.0.0",
+        "concept_fact_ids":[],
+        "definition_ids":[],
+        "symbol_binding_ids":[],
+        "scope_id":storage::id(),
+        "semantic_key":"native-test",
+        "purpose":"test",
+        "placement_anchor":{"kind":"whole"},
+        "parameters":parameters,
+        "parameter_schema_version":"1.0.0",
+        "value_bindings":[],
+        "computation":{
+            "algorithm_id":"conv2d_v1",
+            "algorithm_version":"1.0.0",
+            "operator_semantics":"cross_correlation",
+            "formula_id":"",
+            "input_shape":[1,2,2],
+            "output_shape":[2,2],
+            "precision_policy_id":"f64_abs_1e-9_rel_1e-9",
+            "dependency_binding_ids":[]
+        },
+        "resources":[],
+        "source_refs":[],
+        "snapshot_id":storage::id(),
+        "fact_set_revision":storage::id(),
+        "interaction_state":{
+            "selected_input_ids":[],
+            "selected_output_ids":[],
+            "step_index":0,
+            "camera":null,
+            "user_parameter_overrides":[]
+        },
+        "presentation_by_tier":[],
+        "generation_status":"ready",
+        "validation":{
+            "checks":{"schema":"pass","source":"unknown","semantic":"pass","math":"pass"},
+            "validator_version":"1.0.0",
+            "parameters_hash":canonical_hash(&parameters),
+            "validated_revision":revision_id,
+            "diagnostics":[]
+        },
+        "fallback":{"preview_resource_id":null,"description":"native test","table":[]}
+    })).unwrap();
+    db.store.write(|t| {
+        let committed = storage::commit_version(
+            t,
+            &object_id,
+            "visualization",
+            &revision_id,
+            storage::value(&content)?,
+            "visualization.changed",
+            json!({"kind":"lesson","lesson_id":lesson_id}),
+            None,
+            None,
+        )?;
+        t.execute(
+            "INSERT INTO visualizations VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+            params![
+                object_id,
+                note_id,
+                revision_id,
+                "conv2d_spatial",
+                "1.0.0",
+                "1.0.0",
+                "native-test",
+                0,
+                canonical_hash(&parameters),
+                storage::encode(&committed)?,
+                "ready",
+                storage::encode(&committed["validation"])?
+            ],
+        ).map_err(storage::sql_error)?;
+        Ok(())
+    }).unwrap();
+    let visualizations = visualizations::Visualizations::new(db.store.clone());
+    let evaluated = visualizations.evaluate(VisualizationEvaluateInput {
+        object_id: object_id.clone(),
+        revision_id: revision_id.clone(),
+        parameters: parameters.clone(),
+        interaction_seq: 1,
+        algorithm_version: "1.0.0".into(),
+    }).unwrap();
+    assert_eq!(evaluated.shape, [2, 2]);
+    assert_eq!(evaluated.values, [1., 2., 3., 4.]);
+
+    assert_eq!(
+        visualizations.evaluate(VisualizationEvaluateInput {
+            object_id: object_id.clone(),
+            revision_id: storage::id(),
+            parameters: parameters.clone(),
+            interaction_seq: 2,
+            algorithm_version: "1.0.0".into(),
+        }).unwrap_err().code,
+        ErrorCode::Conflict
+    );
+    assert_eq!(
+        visualizations.evaluate(VisualizationEvaluateInput {
+            object_id: object_id.clone(),
+            revision_id: revision_id.clone(),
+            parameters: parameters.clone(),
+            interaction_seq: 0,
+            algorithm_version: "1.0.0".into(),
+        }).unwrap_err().code,
+        ErrorCode::StaleInput
+    );
+    let mut invalid = parameters.clone();
+    invalid["stride"] = json!([0, 1]);
+    let invalid_parameters = visualizations.evaluate(VisualizationEvaluateInput {
+            object_id: object_id.clone(),
+            revision_id: revision_id.clone(),
+            parameters: invalid,
+            interaction_seq: 3,
+            algorithm_version: "1.0.0".into(),
+        }).unwrap_err();
+    assert!(matches!(invalid_parameters.code, ErrorCode::InvalidArgument | ErrorCode::InvalidResult));
+    let big = vec![vec![vec![0.0; 257]; 257]];
+    assert_eq!(
+        visualizations.evaluate(VisualizationEvaluateInput {
+            object_id: object_id.clone(),
+            revision_id: revision_id.clone(),
+            parameters: json!({
+                "operator_dimension":2,
+                "scene_dimension":3,
+                "operator_semantics":"cross_correlation",
+                "axis_order":"CHW",
+                "input":big,
+                "kernel":[[[1]]],
+                "stride":[1,1],
+                "padding":[0,0,0,0],
+                "dilation":[1,1],
+                "bias":0
+            }),
+            interaction_seq: 3,
+            algorithm_version: "1.0.0".into(),
+        }).unwrap_err().code,
+        ErrorCode::InvalidArgument
+    );
+    let mut wrong_template = content;
+    wrong_template.template_id = "unregistered_template".into();
+    db.store.write(|t| {
+        t.execute(
+            "UPDATE visualizations SET description_json=?2 WHERE object_id=?1",
+            params![object_id, storage::encode(&wrong_template)?],
+        ).map_err(storage::sql_error)?;
+        Ok(())
+    }).unwrap();
+    assert_eq!(
+        visualizations.evaluate(VisualizationEvaluateInput {
+            object_id: object_id,
+            revision_id: revision_id,
+            parameters,
+            interaction_seq: 4,
+            algorithm_version: "1.0.0".into(),
+        }).unwrap_err().code,
+        ErrorCode::UnsupportedCapability
+    );
+}
+
 #[test]
 fn task_resource_reservation_cancellation_and_restart_keep_checkpoint() {
     let db = TestLibrary::new();
@@ -1207,6 +1393,186 @@ fn material_sidecar_roundtrip_uses_managed_original_and_host_search() {
     host.store
         .read(|c| library::check_source(c, &job.input.snapshot.sources[0]))
         .unwrap();
+}
+
+#[test]
+fn native_material_acceptance_publishes_local_manifest_and_rejects_stale_inputs() {
+    fn manifest(
+        material_id: &str,
+        source_version_id: &str,
+        parse_version_id: &str,
+        source_hash: &str,
+    ) -> MaterialManifest {
+        let page_id = storage::id();
+        let region_id = storage::id();
+        let object_id = storage::id();
+        let object_revision = storage::id();
+        let block_id = storage::id();
+        let element_id = storage::id();
+        let source = SourceRef {
+            entity_id: material_id.into(),
+            revision_id: source_version_id.into(),
+            content_hash: source_hash.into(),
+            selector: Selector::V2(MaterialSelector {
+                kind: "material_region".into(),
+                material_id: material_id.into(),
+                source_version_id: source_version_id.into(),
+                parse_version_id: parse_version_id.into(),
+                page_id: page_id.clone(),
+                region_id: region_id.clone(),
+                bbox: vec![0., 0., 1., 1.],
+                coordinate_space: "rotated_page_normalized".into(),
+            }),
+        };
+        serde_json::from_value(json!({
+            "format":"focaus.material",
+            "format_version":"2.0.0",
+            "material_id":material_id,
+            "source_version_id":source_version_id,
+            "parse_version_id":parse_version_id,
+            "parent_parse_version_id":null,
+            "source_hash":source_hash,
+            "engine_build":"native-test",
+            "parse_profile":"light",
+            "requested_pages":[0],
+            "pages":[{
+                "page_id":page_id,
+                "revision_id":storage::id(),
+                "source_page_index":0,
+                "display_label":"1",
+                "width":100.0,
+                "height":100.0,
+                "unit":"pt",
+                "rotation":0,
+                "source_transform":[],
+                "preview_resource_id":null,
+                "reading_order":[object_id],
+                "region_ids":[region_id],
+                "status":"complete",
+                "errors":[]
+            }],
+            "regions":[{
+                "region_id":region_id,
+                "page_id":page_id,
+                "bbox":[0.,0.,1.,1.],
+                "object_ids":[object_id],
+                "semantic_role":"body",
+                "parent_region_id":null
+            }],
+            "objects":[{
+                "object_id":object_id,
+                "revision_id":object_revision,
+                "source_refs":[source],
+                "region_ids":[region_id],
+                "layout":{"bounds":[0.,0.,1.,1.],"z_order":0,"group_id":null,"constraints":[]},
+                "extraction":"native",
+                "editability":"native",
+                "status":"complete",
+                "children":[],
+                "type":"text",
+                "content":{"block_id":block_id,"runs":[{"element_id":element_id,"text":"local material"}],"level":1}
+            }],
+            "resources":[],
+            "corrections_applied":[],
+            "unresolved_conflicts":[],
+            "provenance":{},
+            "completion":"complete",
+            "search_units":[],
+            "search_coverage":{
+                "requested_pages":[page_id],
+                "processed_pages":[page_id],
+                "unprocessed":[],
+                "failed":[],
+                "state":"complete"
+            }
+        }))
+        .unwrap()
+    }
+
+    let db = TestLibrary::new();
+    let host = ipc::NativeHost::open(&db.path, INITIAL_MIGRATION).unwrap();
+    let lesson_id = lesson(&db.store);
+    let source_file = db.path.join("minimal.txt");
+    std::fs::write(&source_file, "local source").unwrap();
+    let job = host
+        .import_material_original(
+            &source_file,
+            &lesson_id,
+            MaterialImportInputPurpose::Textbook,
+            vec![0],
+        )
+        .unwrap();
+    let source = job.input.snapshot.sources[0].clone();
+    host.tasks
+        .transition(&job.task.task_id, 1, TaskState::Running)
+        .unwrap();
+    let input = MaterialPageResultInput {
+        task_id: job.task.task_id.clone(),
+        snapshot_id: job.task.snapshot_id.clone(),
+        manifest: manifest(
+            &job.material_id,
+            &job.source_version_id,
+            &job.parse_version_id,
+            &source.content_hash,
+        ),
+    };
+    validate("MaterialManifest", &json!(input.manifest)).unwrap();
+    let committed = host.accept_material_result(input.clone()).unwrap();
+    assert_eq!(committed["publication"], "committed");
+    let events: Vec<String> = db
+        .store
+        .read(|c| {
+            let mut q = c
+                .prepare("SELECT event_type FROM outbox WHERE task_id=?1")
+                .map_err(storage::sql_error)?;
+            let events = q.query_map([&job.task.task_id], |r| r.get(0))
+                .map_err(storage::sql_error)?
+                .collect::<std::result::Result<Vec<String>, _>>()
+                .map_err(storage::sql_error)?;
+            Ok(events)
+        })
+        .unwrap();
+    assert!(events.iter().any(|event| event == "material.page_ready"));
+    assert!(events.iter().any(|event| event == "material.parse_changed"));
+    assert!(events.iter().any(|event| event == "search.invalidated"));
+
+    let content = db
+        .store
+        .read(|c| library::get_content(c, &ContentGetInput {
+            entity_id: job.material_id.clone(),
+            revision_id: Some(job.parse_version_id.clone()),
+            selector: None,
+        }))
+        .unwrap();
+    assert_eq!(content["format"], "focaus.material");
+    assert_eq!(content["format_version"], "2.0.0");
+    assert_eq!(host.accept_material_result(input.clone()).unwrap()["duplicate"], true);
+
+    let mut wrong_source = input.manifest.clone();
+    wrong_source.parse_version_id = storage::id();
+    wrong_source.source_hash = "0".repeat(64);
+    assert_eq!(
+        host.accept_material_result(MaterialPageResultInput {
+            task_id: job.task.task_id.clone(),
+            snapshot_id: job.task.snapshot_id.clone(),
+            manifest: wrong_source,
+        })
+        .unwrap_err()
+        .code,
+        ErrorCode::InvalidResult
+    );
+    let mut stale_parent = input.manifest;
+    stale_parent.parse_version_id = storage::id();
+    assert_eq!(
+        host.accept_material_result(MaterialPageResultInput {
+            task_id: job.task.task_id,
+            snapshot_id: job.task.snapshot_id,
+            manifest: stale_parent,
+        })
+        .unwrap_err()
+        .code,
+        ErrorCode::StaleInput
+    );
 }
 
 #[test]
