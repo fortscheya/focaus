@@ -379,11 +379,21 @@ export function App() {
   useEffect(() => {
     if (runtime?.mode !== 'native') return;
     for (const view of nativeViews) {
-      if (view.target.kind !== 'entity') continue;
-      if (nativeProjections[view.target.entity_id]) continue;
-      const key = view.target.entity_id;
-      const revisionId = view.target.revision_id;
-      const selector = view.target.selector;
+      let key: string;
+      let revisionId: string | null;
+      let selector: import('@focaus/contracts').Selector | null;
+      if (view.target.kind === 'entity') {
+        key = view.target.entity_id;
+        revisionId = view.target.revision_id;
+        selector = view.target.selector;
+      } else if (view.target.content_kind === 'material' && lessonRef.current?.material_scope[0]) {
+        key = lessonRef.current.material_scope[0];
+        revisionId = null;
+        selector = null;
+      } else {
+        continue;
+      }
+      if (nativeProjections[key]) continue;
       const token = projectionGate.current.begin(key);
       void adapter.invoke('content.get', {entity_id: key, revision_id: revisionId, selector}, makeEnvelope('content.get', undefined, revisionId ? {[key]: revisionId} : {})).then((response) => {
         if (!projectionGate.current.accepts(key, token) || response.status === 'error' || !response.result) return;

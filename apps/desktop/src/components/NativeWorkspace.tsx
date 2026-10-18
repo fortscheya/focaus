@@ -67,7 +67,12 @@ export function NativeWorkspace({
     return `entity · ${view.target.entity_id}`;
   };
 
-  const activeProjection = activeView ? projections[activeView.target.kind === 'entity' ? activeView.target.entity_id : activeView.view_id] ?? projections[activeView.view_id] ?? null : null;
+  const activeProjection = (() => {
+    if (!activeView) return null;
+    if (activeView.target.kind === 'entity') return projections[activeView.target.entity_id] ?? null;
+    const contentKind = activeView.target.content_kind;
+    return projections[activeView.view_id] ?? Object.values(projections).find((projection) => projection.kind === contentKind) ?? null;
+  })();
 
   useEffect(() => {
     if (course) setCourseName(course.name);
