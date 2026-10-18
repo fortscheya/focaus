@@ -1044,3 +1044,167 @@ fn old_stop_request_cannot_cross_pause_or_assignment_epoch() {
         );
     }
 }
+
+#[test]
+#[ignore = "requires an integrated material_engine module; set FOCAUS_TEST_MATERIAL_ENGINE"]
+fn material_sidecar_roundtrip_uses_managed_original_and_host_search() {
+    use std::{
+        io::Write,
+        process::{Command as Process, Stdio},
+    };
+    let engine = std::env::var_os("FOCAUS_TEST_MATERIAL_ENGINE")
+        .expect("explicit integrated engine path required");
+    let db = TestLibrary::new();
+    let host = ipc::NativeHost::open(&db.path, INITIAL_MIGRATION).unwrap();
+    let window = storage::id();
+    host.bind_window(
+        "main",
+        &window,
+        vec![serde_json::from_value(json!({"kind":"global"})).unwrap()],
+    )
+    .unwrap();
+    let created = host
+        .dispatch_webview(
+            "main",
+            command("course.create", &window, json!({"name":"合成资料纵向验证"})),
+        )
+        .unwrap();
+    let course = created.result.unwrap()["course_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let created=host.dispatch_webview("main",command("lesson.create",&window,json!({"course_id":course,"title":"Material native integration","actual_date":null,"timezone":"Asia/Shanghai"}))).unwrap();
+    let lesson = created.result.unwrap()["lesson_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let source = db.path.join("original.txt");
+    let text = "未挂载课件 Straße 学习 😀";
+    std::fs::write(&source, text).unwrap();
+    let mut job = host
+        .import_material_original(
+            &source,
+            &lesson,
+            MaterialImportInputPurpose::Textbook,
+            vec![0],
+        )
+        .unwrap();
+    job.input.budget_ms = 3000;
+    std::fs::remove_file(&source).unwrap();
+    assert!(std::path::Path::new(&job.input.source_handle).is_file());
+    host.tasks
+        .transition(&job.task.task_id, 1, TaskState::Running)
+        .unwrap();
+    let request = job.engine_request().unwrap();
+    validate("EngineRequest", &json!(request)).unwrap();
+    let mut child = Process::new("python3")
+        .args(["-m", "material_engine"])
+        .env("PYTHONPATH", engine)
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    writeln!(stdin, "{}", serde_json::to_string(&request).unwrap()).unwrap();
+    drop(stdin);
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "engine process failed");
+    let frames = String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert!(
+        !frames.iter().any(|frame| frame["kind"] == "error"),
+        "{frames:?}"
+    );
+    let completed = frames.iter().find(|f| f["kind"] == "completed").unwrap();
+    let manifest: MaterialManifest =
+        serde_json::from_value(completed["payload"]["manifest"].clone()).unwrap();
+    validate("MaterialManifest", &json!(manifest)).unwrap();
+    let mut wrong = manifest.clone();
+    wrong.source_hash = "0".repeat(64);
+    assert!(host
+        .accept_material_result(MaterialPageResultInput {
+            task_id: job.task.task_id.clone(),
+            snapshot_id: job.task.snapshot_id.clone(),
+            manifest: wrong
+        })
+        .is_err());
+    assert!(host.store.head(&job.material_id).unwrap()["parse_version_id"].is_null());
+    let preview = manifest
+        .resources
+        .iter()
+        .find(|r| r.media_type == "image/svg+xml")
+        .unwrap();
+    let preview_path = std::path::Path::new(&job.input.staging_handle).join(&preview.relative_path);
+    let safe_bytes = std::fs::read(&preview_path).unwrap();
+    let unsafe_svg = "<svg><script>bad()</script></svg>";
+    std::fs::write(&preview_path, unsafe_svg).unwrap();
+    let mut unsafe_manifest = manifest.clone();
+    let unsafe_preview = unsafe_manifest
+        .resources
+        .iter_mut()
+        .find(|r| r.resource_id == preview.resource_id)
+        .unwrap();
+    unsafe_preview.sha256 = search_text_hash(unsafe_svg);
+    unsafe_preview.byte_length = unsafe_svg.len() as u64;
+    assert_eq!(
+        host.accept_material_result(MaterialPageResultInput {
+            task_id: job.task.task_id.clone(),
+            snapshot_id: job.task.snapshot_id.clone(),
+            manifest: unsafe_manifest
+        })
+        .unwrap_err()
+        .code,
+        ErrorCode::InvalidResult
+    );
+    std::fs::write(&preview_path, safe_bytes).unwrap();
+    let input = MaterialPageResultInput {
+        task_id: job.task.task_id.clone(),
+        snapshot_id: job.task.snapshot_id.clone(),
+        manifest: manifest.clone(),
+    };
+    let accepted = host.accept_material_result(input.clone()).unwrap();
+    assert_eq!(accepted["publication"], "committed");
+    let content=host.dispatch_webview("main",command("content.get",&window,json!({"entity_id":job.material_id,"revision_id":job.parse_version_id,"selector":null}))).unwrap();
+    validate("MaterialManifest", &content.result.unwrap()).unwrap();
+    let bytes = host
+        .read_resource(ResourceReadInput {
+            resource_id: preview.resource_id.clone(),
+            offset: 0,
+            length: 100,
+        })
+        .unwrap();
+    assert!(!bytes["bytes"].as_array().unwrap().is_empty());
+    assert_eq!(
+        host.accept_material_result(input).unwrap()["duplicate"],
+        true
+    );
+    let opened=host.dispatch_webview("main",command("view.open",&window,json!({"lesson_id":lesson,"target":{"kind":"entity","entity_id":job.material_id,"revision_id":null,"selector":null},"placement":"grid"}))).unwrap();
+    let view: ContentView = serde_json::from_value(opened.result.unwrap()).unwrap();
+    let search=host.dispatch_webview("main",command("search.open",&window,json!({"view_id":view.view_id,"target":view.target,"version_mode":"current","actual_visible_tier":null,"revision_ids":[]}))).unwrap();
+    let session: SearchSession = serde_json::from_value(search.result.unwrap()).unwrap();
+    host.dispatch_webview("main",command("search.query",&window,json!({"search_id":session.search_id,"query_seq":1,"query":"SS","case_sensitive":false}))).unwrap();
+    let page = host
+        .search
+        .page(SearchPageInput {
+            search_id: session.search_id,
+            query_seq: 1,
+            scope_snapshot_id: session.scope_snapshot_id,
+            cursor: None,
+        })
+        .unwrap();
+    assert_eq!(page.total_count, 1);
+    assert_eq!(
+        (page.hits[0].ranges[0].start, page.hits[0].ranges[0].end),
+        (10, 11)
+    );
+    assert_ne!(page.hits[0].matched_anchor.owner_entity_id, job.material_id);
+    assert_eq!(page.hits[0].nav_kind, SearchHitNavKind::PageRegion);
+    host.store
+        .read(|c| library::check_source(c, &job.input.snapshot.sources[0]))
+        .unwrap();
+}

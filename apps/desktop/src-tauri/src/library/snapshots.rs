@@ -181,12 +181,19 @@ fn source(c: &Connection, id: &str, selector: Selector) -> Result<SourceRef> {
         selector,
     })
 }
-fn assemble(
+pub(crate) fn assemble(
     c: &Connection,
     input: &SnapshotBuildInput,
     window: Option<&CatchupWindow>,
 ) -> Result<InputSnapshot> {
     let target = head(c, &input.target_id)?;
+    let target_revision: String = c
+        .query_row(
+            "SELECT revision_id FROM entities WHERE entity_id=?1",
+            [&input.target_id],
+            |r| r.get(0),
+        )
+        .map_err(sql_error)?;
     let mut recording = target["recording_id"].as_str().map(str::to_owned);
     if recording.is_none() && input.evidence_cutoff.len() == 1 {
         recording = Some(input.evidence_cutoff[0].recording_id.clone());
@@ -249,13 +256,7 @@ fn assemble(
         )
         .map_err(sql_error)?
     } else {
-        (
-            target["revision_id"]
-                .as_str()
-                .unwrap_or(&input.target_id)
-                .into(),
-            None,
-        )
+        (target_revision.clone(), None)
     };
     let mut sources = Vec::new();
     let asr = matches!(input.purpose, TaskKind::AsrStream | TaskKind::AsrFile);
@@ -383,7 +384,7 @@ fn assemble(
         sources,
         attachment_set_revision: attachments,
         fact_set_revision: facts,
-        target_base_revision: target["revision_id"].as_str().map(str::to_owned),
+        target_base_revision: Some(target_revision),
         edit_revision: None,
         language_tier: input.language_tier,
         evidence_cutoff: input.evidence_cutoff.clone(),
@@ -411,13 +412,22 @@ fn evidence_eligible(
     seq: u64,
 ) -> Result<bool> {
     check_source(c, source)?;
-    let committed: Option<u64> = c
+    let mut committed: Option<u64> = c
         .query_row(
             "SELECT MAX(global_seq) FROM outbox WHERE revision_id=?1",
             [&source.revision_id],
             |r| r.get(0),
         )
         .map_err(sql_error)?;
+    if let Selector::V2(selector) = &source.selector {
+        committed = c
+            .query_row(
+                "SELECT MAX(global_seq) FROM outbox WHERE entity_id=?1 AND revision_id=?2",
+                params![source.entity_id, selector.parse_version_id],
+                |r| r.get(0),
+            )
+            .map_err(sql_error)?;
+    }
     if committed.is_none_or(|commit| commit > seq) {
         return Ok(false);
     }

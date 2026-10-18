@@ -361,6 +361,131 @@ struct StoredSession {
 pub struct SearchCoordinator {
     store: Store,
 }
+pub(crate) struct PreparedProjection {
+    owner: String,
+    revision: String,
+    tier: Option<u64>,
+    units: Vec<SearchUnit>,
+    coverage: SearchCoverage,
+}
+pub(crate) fn prepare_projection(
+    owner: &str,
+    revision: &str,
+    mut units: Vec<SearchUnit>,
+    coverage: SearchCoverage,
+    tier: Option<u64>,
+) -> Result<PreparedProjection> {
+    for unit in &mut units {
+        if unit.owner_entity_id != owner
+            || unit.revision_id != revision
+            || unit.anchor.owner_entity_id != owner
+            || unit.anchor.revision_id != revision
+            || unit.visible_tier != tier
+        {
+            return Err(error(
+                ErrorCode::StaleInput,
+                "Projection owner, revision or tier mismatch",
+            ));
+        }
+        if unit.content_hash != search_text_hash(&unit.display_text) {
+            return Err(error(
+                ErrorCode::InvalidResult,
+                "Search field byte hash mismatch",
+            ));
+        }
+        let (text, mut map) = normalize(&unit.display_text, false)?;
+        let provenance = unit
+            .offset_map
+            .iter()
+            .filter(|e| !e.element_ids.is_empty())
+            .map(|e| {
+                (
+                    (e.original_range.start, e.original_range.end),
+                    e.element_ids.clone(),
+                )
+            })
+            .collect::<std::collections::BTreeMap<_, _>>();
+        for entry in &mut map {
+            if let Some(ids) =
+                provenance.get(&(entry.original_range.start, entry.original_range.end))
+            {
+                entry.element_ids = ids.clone();
+            }
+        }
+        unit.normalized_text = text;
+        unit.offset_map = map;
+        unit.normalization_profile = PROFILE.into();
+    }
+    Ok(PreparedProjection {
+        owner: owner.into(),
+        revision: revision.into(),
+        tier,
+        units,
+        coverage,
+    })
+}
+pub(crate) fn commit_projection(
+    t: &rusqlite::Transaction<'_>,
+    prepared: &PreparedProjection,
+) -> Result<u64> {
+    let PreparedProjection {
+        owner,
+        revision,
+        tier,
+        units,
+        coverage,
+    } = prepared;
+    check_revision(t, owner, revision)?;
+    let generation: u64 = t
+        .query_row(
+            "SELECT COALESCE(MAX(index_generation),0)+1 FROM search_index_state",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(sql_error)?;
+    t.execute("DELETE FROM search_units WHERE owner_entity_id=?1 AND revision_id=?2 AND visible_tier IS ?3",params![owner,revision,tier]).map_err(sql_error)?;
+    for u in units {
+        t.execute(
+            "INSERT INTO search_units VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
+            params![
+                u.search_unit_id,
+                u.owner_entity_id,
+                u.revision_id,
+                u.content_hash,
+                storage::value(&u.kind)?.as_str().unwrap_or(""),
+                u.visible_tier,
+                u.field_path,
+                u.display_text,
+                u.normalized_text,
+                PROFILE,
+                encode(&u.offset_map)?,
+                encode(&u.anchor)?,
+                u.equivalence_group_id,
+                u.source_role,
+                generation
+            ],
+        )
+        .map_err(sql_error)?;
+    }
+    let mut coverage = coverage.clone();
+    coverage.indexed_units = units.len() as u64;
+    coverage.scope_snapshot_id = storage::id();
+    let visibility = epoch(t)?;
+    let manifest = canonical_hash(&json!({"owner":owner,"revision":revision,"profile":PROFILE}));
+    t.execute("INSERT INTO search_index_state VALUES(?1,1,?2,?3,'[]',?4,?5,?6) ON CONFLICT(scope_id) DO UPDATE SET projection_version=1,index_generation=excluded.index_generation,head_manifest_hash=excluded.head_manifest_hash,dirty_ranges_json='[]',coverage_json=excluded.coverage_json,visibility_epoch=excluded.visibility_epoch,last_committed_seq=excluded.last_committed_seq",params![projection_key(owner,revision,*tier),generation,manifest,encode(&coverage)?,visibility,crate::storage::sequence(t)?]).map_err(sql_error)?;
+    emit(
+        t,
+        "search.index_changed",
+        owner,
+        0,
+        revision,
+        json!({"kind":"entity","entity_id":owner}),
+        json!({"index_generation":generation,"coverage":coverage,"dirty_ranges":[]}),
+        None,
+        None,
+    )?;
+    Ok(generation)
+}
 impl SearchCoordinator {
     pub fn new(store: Store) -> Self {
         Self { store }
@@ -371,48 +496,11 @@ impl SearchCoordinator {
         owner: &str,
         revision: &str,
         units: Vec<SearchUnit>,
-        mut coverage: SearchCoverage,
+        coverage: SearchCoverage,
     ) -> Result<u64> {
-        let mut normalized = Vec::with_capacity(units.len());
         let tier = units.first().and_then(|u| u.visible_tier);
-        if units.iter().any(|u| u.visible_tier != tier) {
-            return Err(error(
-                ErrorCode::InvalidArgument,
-                "Projection tiers must be committed separately",
-            ));
-        }
-        let state_key = projection_key(owner, revision, tier);
-        for mut unit in units {
-            if unit.owner_entity_id != owner
-                || unit.revision_id != revision
-                || unit.anchor.owner_entity_id != owner
-                || unit.anchor.revision_id != revision
-            {
-                return Err(error(ErrorCode::StaleInput, "Projection owner mismatch"));
-            }
-            if unit.content_hash != search_text_hash(&unit.display_text) {
-                return Err(error(
-                    ErrorCode::InvalidResult,
-                    "Search field byte hash mismatch",
-                ));
-            }
-            let (text, map) = normalize(&unit.display_text, false)?;
-            unit.normalized_text = text;
-            unit.offset_map = map;
-            unit.normalization_profile = PROFILE.into();
-            validate("SearchUnit", &storage::value(&unit)?)?;
-            normalized.push(unit);
-        }
-        self.store.write(|t| {
-            check_revision(t,owner,revision)?;
-            let generation:u64=t.query_row("SELECT COALESCE(MAX(index_generation),0)+1 FROM search_index_state",[],|r|r.get(0)).map_err(sql_error)?;
-            t.execute("DELETE FROM search_units WHERE owner_entity_id=?1 AND revision_id=?2 AND visible_tier IS ?3",params![owner,revision,tier]).map_err(sql_error)?;
-            for u in &normalized {t.execute("INSERT INTO search_units VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",params![u.search_unit_id,u.owner_entity_id,u.revision_id,u.content_hash,storage::value(&u.kind)?.as_str().unwrap_or(""),u.visible_tier,u.field_path,u.display_text,u.normalized_text,PROFILE,encode(&u.offset_map)?,encode(&u.anchor)?,u.equivalence_group_id,u.source_role,generation]).map_err(sql_error)?;}
-            coverage.indexed_units=normalized.len() as u64;coverage.scope_snapshot_id=storage::id();
-            let visibility=epoch(t)?;let manifest_hash=canonical_hash(&json!({"owner":owner,"revision":revision,"profile":PROFILE}));let seq=crate::storage::sequence(t)?;
-            t.execute("INSERT INTO search_index_state VALUES(?1,1,?2,?3,'[]',?4,?5,?6) ON CONFLICT(scope_id) DO UPDATE SET projection_version=1,index_generation=excluded.index_generation,head_manifest_hash=excluded.head_manifest_hash,dirty_ranges_json='[]',coverage_json=excluded.coverage_json,visibility_epoch=excluded.visibility_epoch,last_committed_seq=excluded.last_committed_seq",params![state_key,generation,manifest_hash,encode(&coverage)?,visibility,seq]).map_err(sql_error)?;
-            emit(t,"search.index_changed",owner,0,revision,json!({"kind":"entity","entity_id":owner}),json!({"index_generation":generation,"coverage":coverage,"dirty_ranges":[]}),None,None)?;Ok(generation)
-        })
+        let prepared = prepare_projection(owner, revision, units, coverage, tier)?;
+        self.store.write(|t| commit_projection(t, &prepared))
     }
     pub fn project_native(
         &self,
@@ -800,6 +888,22 @@ fn check_session(c: &Connection, stored: &StoredSession) -> Result<()> {
             "Search visibility barrier changed",
         ));
     }
+    if s.scope.version_mode == SearchScopeVersionMode::Current {
+        let target: String = c
+            .query_row(
+                "SELECT target_json FROM views WHERE view_id=?1",
+                [&s.view_id],
+                |r| r.get(0),
+            )
+            .map_err(sql_error)?;
+        let (_, current_targets) = resolve_targets(c, &s.scope.lesson_id, &decode(&target)?)?;
+        if current_targets != s.scope.target_ids {
+            return Err(error(
+                ErrorCode::SearchInvalidated,
+                "Search collection or material package membership changed",
+            ));
+        }
+    }
     for (owner, revision) in s.scope.target_ids.iter().zip(&s.scope.revision_ids) {
         if lifecycle(c, owner)? == "deleted" {
             return Err(error(
@@ -850,6 +954,12 @@ fn resolve_targets(
                     ))
                 }
             };
+            if kind == SearchScopeKind::Material {
+                return Ok((
+                    kind,
+                    material_targets(c, &entity.entity_id, entity.revision_id.as_deref())?,
+                ));
+            }
             Ok((kind, vec![entity.entity_id.clone()]))
         }
         ViewTarget::V0(collection) => {
@@ -870,9 +980,56 @@ fn resolve_targets(
                 .map_err(sql_error)?
                 .collect::<std::result::Result<Vec<_>, _>>()
                 .map_err(sql_error)?;
+            if kind == SearchScopeKind::Material {
+                let mut expanded = Vec::new();
+                for material in ids {
+                    expanded.extend(material_targets(c, &material, None)?);
+                }
+                return Ok((kind, expanded));
+            }
             Ok((kind, ids))
         }
     }
+}
+fn material_targets(c: &Connection, material: &str, revision: Option<&str>) -> Result<Vec<String>> {
+    let root =
+        if let Some(revision) = revision {
+            let body: Option<String> = c
+                .query_row(
+                    "SELECT body_json FROM revisions WHERE entity_id=?1 AND revision_id=?2",
+                    params![material, revision],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(sql_error)?
+                .flatten();
+            decode::<Value>(&body.ok_or_else(|| {
+                error(ErrorCode::NotFound, "Material display version unavailable")
+            })?)?
+        } else {
+            head(c, material)?
+        };
+    let mut ids = vec![material.into()];
+    if let Some(parse) = root["parse_version_id"].as_str() {
+        let manifest:String=c.query_row("SELECT manifest_json FROM parse_versions WHERE parse_version_id=?1 AND material_id=?2",params![parse,material],|r|r.get(0)).map_err(sql_error)?;
+        let manifest: MaterialManifest = decode(&manifest)?;
+        for page in &manifest.pages {
+            for object in &page.reading_order {
+                if !ids.contains(object) {
+                    ids.push(object.clone());
+                }
+            }
+        }
+        for object in &manifest.objects {
+            let value = storage::value(object)?;
+            if let Some(id) = value["object_id"].as_str() {
+                if !ids.iter().any(|x| x == id) {
+                    ids.push(id.into());
+                }
+            }
+        }
+    }
+    Ok(ids)
 }
 fn projection_key(owner: &str, revision: &str, tier: Option<u64>) -> String {
     format!(
@@ -1014,7 +1171,7 @@ fn find_hits(c: &Connection, stored: &StoredSession) -> Result<Vec<SearchHit>> {
                     ranges: vec![range],
                     display_snippet: snippet,
                     equivalence_group_id: equivalence.clone(),
-                    nav_kind: if session.scope.kind == SearchScopeKind::Material {
+                    nav_kind: if matches!(anchor.selector, Selector::V2(_)) {
                         SearchHitNavKind::PageRegion
                     } else if matches!(anchor.selector, Selector::V3(_)) {
                         SearchHitNavKind::ObjectFocus

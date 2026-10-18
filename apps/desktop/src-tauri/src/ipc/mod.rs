@@ -32,6 +32,7 @@ pub struct NativeHost {
     pub views: crate::windows::WindowCoordinator,
     pub snapshots: crate::library::snapshots::SnapshotStore,
     pub focaus: crate::library::catchup::FocausCoordinator,
+    pub materials: crate::library::materials::MaterialService,
     pub run_id: String,
     windows: Mutex<BTreeMap<String, WindowBinding>>,
     subscriptions: Mutex<BTreeMap<String, Subscription>>,
@@ -67,6 +68,7 @@ impl NativeHost {
             search: crate::search::SearchCoordinator::new(store.clone()),
             snapshots: crate::library::snapshots::SnapshotStore::new(store.clone()),
             focaus: crate::library::catchup::FocausCoordinator::new(store.clone()),
+            materials: crate::library::materials::MaterialService::new(store.clone()),
             views,
             tasks,
             store,
@@ -202,6 +204,9 @@ impl NativeHost {
             "content.get" => self
                 .store
                 .read(|c| crate::library::get_content(c, &parse(&command.payload)?))?,
+            "resource.read" => {
+                crate::library::resources::read_resource(&self.store, parse(&command.payload)?)?
+            }
             "visualization.evaluate" => {
                 storage::value(&self.visualizations.evaluate(parse(&command.payload)?)?)?
             }
@@ -609,6 +614,22 @@ impl NativeHost {
     pub fn exit(&self) -> Result<()> {
         self.recording.exit()?;
         self.store.flush()
+    }
+    pub fn import_material_original(
+        &self,
+        path: &Path,
+        lesson_id: &str,
+        purpose: MaterialImportInputPurpose,
+        pages: Vec<u64>,
+    ) -> Result<crate::library::materials::MaterialJob> {
+        self.materials
+            .import_original(path, lesson_id, purpose, pages)
+    }
+    pub fn accept_material_result(&self, input: MaterialPageResultInput) -> Result<Value> {
+        self.materials.accept(input)
+    }
+    pub fn read_resource(&self, input: ResourceReadInput) -> Result<Value> {
+        crate::library::resources::read_resource(&self.store, input)
     }
 }
 

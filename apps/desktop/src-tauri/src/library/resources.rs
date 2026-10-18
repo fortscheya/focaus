@@ -1,10 +1,11 @@
 //! Host-only file capabilities and immutable managed byte copies.
 use crate::storage::{self, io_error, Result};
 use focaus_contracts::{error, ErrorCode};
+use rusqlite::{params, OptionalExtension};
 use sha2::{Digest, Sha256};
 use std::{
     fs::{self, File, OpenOptions},
-    io::{Read, Write},
+    io::{Read, Seek, SeekFrom, Write},
     path::{Component, Path, PathBuf},
 };
 
@@ -159,4 +160,52 @@ pub(crate) fn staging_root(root: &Path, task: &str) -> Result<PathBuf> {
     let path = root.join("staging").join(task);
     fs::create_dir_all(&path).map_err(io_error)?;
     Ok(path)
+}
+pub fn read_resource(
+    store: &storage::Store,
+    input: focaus_contracts::ResourceReadInput,
+) -> Result<serde_json::Value> {
+    if input.length > 262_144 {
+        return Err(error(
+            ErrorCode::InvalidArgument,
+            "Resource read exceeds chunk budget",
+        ));
+    }
+    let (relative,sha,media,length)=store.read(|c|c.query_row("SELECT r.relative_path,r.sha256,r.media_type,r.byte_length FROM resources r WHERE r.resource_id=?1 AND r.state='ready' AND EXISTS(SELECT 1 FROM resource_owners o JOIN entities e ON e.entity_id=o.owner_entity_id WHERE o.resource_id=r.resource_id AND e.lifecycle<>'deleted')",[&input.resource_id],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,u64>(3)?))).optional().map_err(storage::sql_error)?.ok_or_else(||error(ErrorCode::SourceDeleted,"Resource has no available owner")))?;
+    let mut file = open_relative(store.root(), Path::new(&relative))?;
+    if file.metadata().map_err(io_error)?.len() != length {
+        return Err(error(ErrorCode::CorruptAsset, "Resource size changed"));
+    }
+    let mut digest = Sha256::new();
+    let mut buffer = [0; 65536];
+    loop {
+        let count = file.read(&mut buffer).map_err(io_error)?;
+        if count == 0 {
+            break;
+        }
+        digest.update(&buffer[..count]);
+    }
+    if format!("{:x}", digest.finalize()) != sha {
+        return Err(error(ErrorCode::CorruptAsset, "Resource checksum changed"));
+    }
+    if input.offset > length {
+        return Err(error(
+            ErrorCode::InvalidArgument,
+            "Resource offset exceeds byte length",
+        ));
+    }
+    let count = input.length.min(length - input.offset);
+    let mut bytes = vec![0; count as usize];
+    file.seek(SeekFrom::Start(input.offset)).map_err(io_error)?;
+    file.read_exact(&mut bytes).map_err(io_error)?;
+    let available=store.read(|c|c.query_row("SELECT EXISTS(SELECT 1 FROM resources r JOIN resource_owners o ON o.resource_id=r.resource_id JOIN entities e ON e.entity_id=o.owner_entity_id WHERE r.resource_id=?1 AND r.state='ready' AND e.lifecycle<>'deleted')",params![input.resource_id],|r|r.get::<_,bool>(0)).map_err(storage::sql_error))?;
+    if !available {
+        return Err(error(
+            ErrorCode::SourceDeleted,
+            "Resource was deleted during read",
+        ));
+    }
+    Ok(
+        serde_json::json!({"resource_id":input.resource_id,"media_type":media,"byte_length":length,"offset":input.offset,"bytes":bytes,"eof":input.offset+count==length}),
+    )
 }

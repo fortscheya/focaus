@@ -1,5 +1,6 @@
 //! Library transactions, immutable revisions and evidence publication gates.
 pub mod catchup;
+pub mod materials;
 pub mod resources;
 pub mod snapshots;
 use crate::storage::{
@@ -39,6 +40,24 @@ pub(crate) fn check_source(c: &Connection, source: &SourceRef) -> Result<()> {
                 return Err(error(
                     ErrorCode::InvalidResult,
                     "Material source selector mismatch",
+                ));
+            }
+            let parsed:Option<String>=c.query_row("SELECT manifest_json FROM parse_versions WHERE parse_version_id=?1 AND material_id=?2 AND source_version_id=?3",params![selector.parse_version_id,source.entity_id,source.revision_id],|r|r.get(0)).optional().map_err(sql_error)?.flatten();
+            let manifest: MaterialManifest = decode(&parsed.ok_or_else(|| {
+                error(
+                    ErrorCode::SourceUnavailable,
+                    "Referenced material parse version unavailable",
+                )
+            })?)?;
+            if !manifest.pages.iter().any(|p| p.page_id == selector.page_id)
+                || !manifest
+                    .regions
+                    .iter()
+                    .any(|r| r.region_id == selector.region_id && r.page_id == selector.page_id)
+            {
+                return Err(error(
+                    ErrorCode::InvalidResult,
+                    "Referenced material page or region unavailable",
                 ));
             }
         }
@@ -87,6 +106,18 @@ pub(crate) fn source_refs_in(value: &Value) -> Result<Vec<SourceRef>> {
     Ok(refs)
 }
 pub(crate) fn source_allowed(source: &SourceRef, snapshot: &InputSnapshot) -> bool {
+    // A frozen canonical parse head also authorizes its exact binary-source
+    // region references. The latter retain the SourceVersion byte checksum;
+    // check_source separately proves the material/parse/region closure.
+    if let Selector::V2(selector) = &source.selector {
+        if snapshot.sources.iter().any(|allowed| {
+            allowed.entity_id == source.entity_id
+                && allowed.revision_id == selector.parse_version_id
+                && matches!(allowed.selector, Selector::V4(_))
+        }) {
+            return true;
+        }
+    }
     snapshot.sources.iter().any(|allowed| {
         allowed.entity_id == source.entity_id
             && allowed.revision_id == source.revision_id
@@ -194,6 +225,48 @@ pub(crate) fn create_lesson(
     Ok(body)
 }
 pub(crate) fn get_content(c: &Connection, input: &ContentGetInput) -> Result<Value> {
+    let entity_state: Option<String> = c
+        .query_row(
+            "SELECT lifecycle FROM entities WHERE entity_id=?1",
+            [&input.entity_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(sql_error)?;
+    if entity_state.as_deref() == Some("deleted") {
+        return Err(error(
+            ErrorCode::SourceDeleted,
+            "Content permanently deleted",
+        ));
+    }
+    let material:Option<(String,String,String,u64)>=c.query_row("SELECT m.source_version_id,m.resource_id,r.sha256,r.byte_length FROM materials m JOIN resources r ON r.resource_id=m.resource_id WHERE m.material_id=?1 AND r.state='ready'",[&input.entity_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional().map_err(sql_error)?;
+    if let Some((source_version, resource, sha, length)) = material {
+        if input.revision_id.as_deref() == Some(source_version.as_str()) {
+            return Ok(
+                json!({"kind":"material_source_version","material_id":input.entity_id,"source_version_id":source_version,"resource_id":resource,"sha256":sha,"byte_length":length}),
+            );
+        }
+        let parse = if let Some(revision) = &input.revision_id {
+            c.query_row("SELECT manifest_json FROM parse_versions WHERE material_id=?1 AND parse_version_id=?2",params![input.entity_id,revision],|r|r.get::<_,Option<String>>(0)).optional().map_err(sql_error)?.flatten()
+        } else {
+            let body = head(c, &input.entity_id)?;
+            if let Some(parse) = body["parse_version_id"].as_str() {
+                c.query_row(
+                    "SELECT manifest_json FROM parse_versions WHERE parse_version_id=?1",
+                    [parse],
+                    |r| r.get::<_, Option<String>>(0),
+                )
+                .optional()
+                .map_err(sql_error)?
+                .flatten()
+            } else {
+                None
+            }
+        };
+        if let Some(parse) = parse {
+            return decode(&parse);
+        }
+    }
     // Host projections are not content revisions and have dedicated stores.
     let view: bool = c
         .query_row(
