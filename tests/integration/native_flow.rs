@@ -4,6 +4,22 @@ use focaus_contracts::{CommandResult, ErrorCode};
 use focaus_desktop::{ipc::NativeHost, storage, wire, INITIAL_MIGRATION};
 use serde_json::{json, Value};
 
+#[test]
+fn host_math_matches_independent_goldens_including_asymmetric_padding() {
+    let cases: Value = serde_json::from_str(include_str!("../../fixtures/contracts/math-golden.json")).unwrap();
+    for case in cases.as_array().unwrap() {
+        let template = if case["type"] == "CurveParameters" {"function_curve_2d"} else {"conv2d_spatial"};
+        let input = focaus_contracts::VisualizationEvaluateInput {
+            object_id:storage::id(), revision_id:storage::id(), interaction_seq:1,
+            parameters:case["parameters"].clone(), algorithm_version:"1.0.0".into(),
+        };
+        let result = focaus_desktop::visualizations::evaluate_template(template, &input).unwrap();
+        assert_eq!(serde_json::to_value(result.shape).unwrap(), case["shape"], "{}", case["name"]);
+        let expected:Vec<f64> = serde_json::from_value(case["values"].clone()).unwrap();
+        assert_eq!(result.values, expected, "{}", case["name"]);
+    }
+}
+
 fn capabilities() -> Value {
     json!({"supported_contract_majors":[2],"supported_material_majors":[2],
         "visualization_protocol_majors":[1],"templates":{"function_curve_2d":["1.0.0"],"conv2d_spatial":["1.0.0"]},

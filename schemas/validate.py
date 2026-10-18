@@ -7,6 +7,8 @@ class ContractError(ValueError):
  def __init__(self,code,reason):self.code=code;super().__init__(reason)
 def canonical_hash(value):
  return hashlib.sha256(rfc8785.dumps(value)).hexdigest()
+def search_text_hash(text):
+ return hashlib.sha256(text.encode('utf-8')).hexdigest()
 def fail(reason,code='INVALID_RESULT'):raise ContractError(code,reason)
 def finite(v):
  if isinstance(v,float) and not math.isfinite(v):fail('non-finite number')
@@ -104,7 +106,7 @@ def adapt_legacy_material(original,new_parse_version_id):
   if o.get('type')=='text':
    kept.append(copy.deepcopy(o));text=''.join(r['text'] for r in o['content']['runs'])
    anchor={'owner_entity_id':o['object_id'],'revision_id':o['revision_id'],'selector':{'kind':'text','block_id':o['content']['block_id'],'anchor':{'left_element_id':None,'right_element_id':None,'element_ids':[r['element_id'] for r in o['content']['runs']],'scalar_range':{'start':0,'end':len(text)}}},'field_path':'content.runs','scalar_range':{'start':0,'end':len(text)},'audio_spans':[],'fallback':None}
-   out['search_units'].append({'unit_key':o['object_id'],'owner_entity_id':o['object_id'],'revision_id':o['revision_id'],'content_hash':canonical_hash(o['content']),'display_text':text,'field_path':'content.runs','anchor':anchor,'equivalence_group_id':None,'alternate_anchors':[],'source_role':'material_supplement','extraction_version':'1.0.0'})
+   out['search_units'].append({'unit_key':o['object_id'],'owner_entity_id':o['object_id'],'revision_id':o['revision_id'],'content_hash':search_text_hash(text),'display_text':text,'field_path':'content.runs','anchor':anchor,'equivalence_group_id':None,'alternate_anchors':[],'source_role':'material_supplement','extraction_version':'1.0.0'})
   else:
    # Do not invent an editable object for unknown semantics. Preserve it in the original package.
    unprocessed.append({'page_id':None,'region_id':None,'reason':'legacy_object_requires_reparse:'+o.get('type','unknown')})

@@ -179,3 +179,5 @@
 - D170（2026-10-18，用户一次性本地整合授权）：用户回复“允许本项目上述本地整合与契约同步”，授权总控在复核目录范围、精确diff、测试证据后本地cherry-pick/merge四路成果并向四路同步公共契约。仅本项目；不包含rebase、push、发布、删除分支/worktree。无需逐commit重复询问。
 
 - D171（2026-10-18，用户资料路径）：用户提供/Users/pitr/Desktop/SKD/DeepLearning用于真实课程验收。已找到L08/L09原始PDF，仅本地只读提取/预览获当前任务授权；原件/派生内容不纳管、不上传，旧笔记不作转写真值，qta与课堂对应仍未知。
+
+- D172（2026-10-18，总控工程编码澄清）：SourceRef结构revision沿D169用RFC8785；material原件版本引用(material_id/source_version_id)按C01资源字节SHA验证。SearchUnit/ExtractedSearchUnit的content_hash固定为display_text未经规范化的UTF8字节SHA，owner/revision仍是版本权威；此前D169笼统content hash描述在搜索字段投影上由本条细化，旧包适配同步修正。无序列化形状/产品语义变更，现2.0.0尚无部署数据；原始包保留，旧搜索投影可重建。跨语言golden与E真实子进程契约测试保证编码一致。

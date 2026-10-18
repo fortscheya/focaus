@@ -39,6 +39,11 @@ fn canonical_hash_is_cross_language() {
  for c in vectors.as_array().unwrap() {assert_eq!(canonical_hash(&c["value"]),c["sha256"].as_str().unwrap());}
 }
 #[test]
+fn search_field_hash_preserves_original_unicode_and_line_endings() {
+ let vectors:Value=serde_json::from_str(include_str!("../../../fixtures/contracts/search-hash-golden.json")).unwrap();
+ for c in vectors.as_array().unwrap() {assert_eq!(search_text_hash(c["text"].as_str().unwrap()),c["sha256"].as_str().unwrap());}
+}
+#[test]
 fn unknown_component_preserves_original_but_refuses_writes() {
  let v=serde_json::json!({"protocol_version":"1.0.0","template_id":"unknown","template_version":"1.0.0","opaque":{"future":true},"fallback":{"description":"unsupported"}});
  let result=read_visualization(&v).unwrap();assert_eq!(result["write_allowed"],false);assert_eq!(result["original"],v);

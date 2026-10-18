@@ -22,6 +22,13 @@ serde decoding because Rust `Option<T>` alone does not enforce field presence.
 - `search-golden.json` fixes Unicode 15.0.0 and profile `nfc_casefold_ws_v1`.
 - Content hashes use RFC 8785 (including IEEE 754 number serialization). Resource
   hashes use raw bytes. Test vectors cover number formatting and non-ASCII.
+- Search projection `content_hash` identifies the exact `display_text` UTF-8
+  bytes before normalization, casefolding or newline changes. It is a field hash,
+  not a SourceRef revision hash; owner/revision still provide authority. The
+  E-produced material-region SourceRef identifies the original binary resource
+  version `(material_id, source_version_id, source bytes SHA-256)`. The host must
+  validate that immutable resource version, rather than hashing its metadata.
+  `search-hash-golden.json` fixes this encoding across language boundaries.
 - `x-host-only-commands` must never be exposed directly to a WebView. All native
   entry points authenticate the channel/actor, scope, revisions and tombstones.
 - G1 database migration is schema **1**, independent of contract **2.0.0**.

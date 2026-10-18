@@ -41,6 +41,11 @@ pub fn validate(kind: &str, value: &Value) -> Result<(), SafeError> {
 pub fn canonical_hash(value: &Value) -> String {
     format!("{:x}",Sha256::digest(serde_json_canonicalizer::to_vec(value).expect("finite JSON")))
 }
+/// Search projection field hash: exact display_text UTF-8, before normalization.
+/// This is not the SourceRef hash of the containing structured entity revision.
+pub fn search_text_hash(text: &str) -> String {
+    format!("{:x}", Sha256::digest(text.as_bytes()))
+}
 pub fn credential_binding(model: &str, region: &str, slot: &str) -> Result<(),SafeError> {
     if region!="cn-beijing" || schema()["x-model-bindings"].get(model).and_then(Value::as_str)!=Some(slot) { return Err(error(ErrorCode::InvalidArgument,"credential_binding_mismatch")); }
     Ok(())

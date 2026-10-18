@@ -59,3 +59,4 @@ C向F/N下发物理接线：focaus_bootstrap返回宿主window_id/contract_versi
 - F正在收紧native渲染和宿主真实ID/补读后ACK；N真实搜索/两阶段视图在途；A transport安全边界加固及真实协议核对；E路径/恢复/完整性边界。各阶段提交不等于G2或产品验收完成。
 - E真实课件deep：L08 82页，67 complete/15 partial，text63/table4/formula13/image2，92 search units，23.39s；L09 86页，76 complete/10 partial，text76/formula8/image2，84 units，22.71s。两份2页图像回退，搜索覆盖partial；light分别80/84 basic_ready和2 partial。manifest通过公共语义校验，原件/派生未上传或纳管。
 - 真实课程质量、课件与qta内容对齐、真实云、macOS设备和长录音未验证。Rustfmt未安装，未宣称格式检查通过。
+- A第二阶段49698e2→f391501，复跑26测试通过。C新增真实E JSONL子进程握手/转换/新进程resume/资源hash/未知major测试2项通过，Python总13项；Rust契约6、native_flow2、wire1与A26通过。非对称padding独立golden已入库，暴露F的CSS顺序误用，待F修复。D172固定搜索字段hash及资料资源SourceRef验证编码。

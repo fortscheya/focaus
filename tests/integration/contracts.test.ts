@@ -20,4 +20,7 @@ for(const c of read('fixtures/contracts/hash-golden.json')) {
  const encode=canonicalize as unknown as (v:unknown)=>string;
  assert.equal(createHash('sha256').update(encode(c.value)).digest('hex'),c.sha256);
 }
+for(const c of read('fixtures/contracts/search-hash-golden.json')) {
+ assert.equal(createHash('sha256').update(c.text, 'utf8').digest('hex'),c.sha256);
+}
 console.log(`TypeScript/Ajv schema fixtures passed: ${checked}; RFC8785 vectors passed`);
