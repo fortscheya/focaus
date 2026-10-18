@@ -81,6 +81,7 @@ pub struct AsrService {
     session: StreamingSession,
     gate: ResultGate,
     binding: focaus_contracts::CredentialBinding,
+    recording_id: Option<String>,
     next_chunk_seq: u64,
     finish_sent: bool,
     cancelled: bool,
@@ -108,6 +109,7 @@ impl AsrService {
             session,
             gate,
             binding: config.open.binding,
+            recording_id: config.open.snapshot.recording_id.clone(),
             next_chunk_seq: 0,
             finish_sent: false,
             cancelled: false,
@@ -120,6 +122,10 @@ impl AsrService {
 
     pub fn binding(&self) -> &focaus_contracts::CredentialBinding {
         &self.binding
+    }
+
+    pub fn update_assignment_epoch(&mut self, current_assignment_epoch: Option<u64>) {
+        self.gate.update_current_assignment_epoch(current_assignment_epoch);
     }
 
     pub fn checkpoint_input(
@@ -176,6 +182,9 @@ impl AsrService {
             return Err(stale("asr_feed_after_finish"));
         }
         crate::asr::validate_audio_chunk(&chunk)?;
+        if self.recording_id.as_deref() != Some(chunk.audio_span.recording_id.as_str()) {
+            return Err(stale("asr_chunk_recording_stale"));
+        }
         if chunk.mapping.mapping_revision_id != self.session.mapping_revision_id() {
             return Err(stale("asr_chunk_session_mapping_stale"));
         }

@@ -909,6 +909,10 @@ impl ResultGate {
         self.cancelled = true;
     }
 
+    pub fn update_current_assignment_epoch(&mut self, current_assignment_epoch: Option<u64>) {
+        self.current_assignment_epoch = current_assignment_epoch;
+    }
+
     pub fn classify(&mut self, candidate: &AsrRawCandidate) -> PublishDecision {
         if self.cancelled || candidate.task_id != self.task_id {
             return PublishDecision::DropCancelled;
@@ -1073,6 +1077,9 @@ mod tests {
         assert_eq!(gate.classify(&candidate), PublishDecision::Duplicate);
         gate.cancel();
         assert_eq!(gate.classify(&candidate), PublishDecision::DropCancelled);
+        let mut assignment_gate = ResultGate::new("local", 1, "snap", Some(1), Some(1));
+        assignment_gate.update_current_assignment_epoch(Some(2));
+        assert_eq!(assignment_gate.classify(&candidate), PublishDecision::StaleAssignment);
         let source = SourceRef { entity_id: "raw".into(), revision_id: "raw-rev".into(), content_hash: "hash".into(), selector: Selector::V4(WholeSelector { kind: "whole".into() }) };
         let submission = build_asr_result_submission_for_open(&open(), &candidate, vec![source.clone()]).unwrap();
         assert_eq!(submission.candidate["result_semantics"], ASR_RESULT_SEMANTICS);
