@@ -1,0 +1,75 @@
+[
+  {
+    "value": {
+      "b": 2,
+      "a": "学习"
+    },
+    "sha256": "7113e68cd5ccb63b99570e99d65b54e88be08e00335b9798a5be519506f28f7a"
+  },
+  {
+    "value": {
+      "z": -0.0,
+      "numbers": [
+        1.0,
+        1e-06,
+        1e+21
+      ]
+    },
+    "sha256": "0cfce34ab4515a9a98a8c5382bfef0a6574142ace71f0debc87414bd8ee84c98"
+  },
+  {
+    "value": {
+      "operator_dimension": 2,
+      "scene_dimension": 3,
+      "operator_semantics": "cross_correlation",
+      "axis_order": "CHW",
+      "input": [
+        [
+          [
+            1,
+            2,
+            3
+          ],
+          [
+            4,
+            5,
+            6
+          ],
+          [
+            7,
+            8,
+            9
+          ]
+        ]
+      ],
+      "kernel": [
+        [
+          [
+            1,
+            0
+          ],
+          [
+            0,
+            -1
+          ]
+        ]
+      ],
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "dilation": [
+        1,
+        1
+      ],
+      "bias": null
+    },
+    "sha256": "abe04492f8b98d50d0cac1fc5105af50c5c51d89d108c9ca5dc6c66d78217aef"
+  }
+]

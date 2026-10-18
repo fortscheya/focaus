@@ -1,0 +1,74 @@
+[
+  {
+    "id": "C02-overlap",
+    "kind": "recording",
+    "given": "stable streaming [0,1000), filetrans [500,1500)",
+    "expect": "preserve stable hash; admit [1000,1500) only; ambiguous word boundary review"
+  },
+  {
+    "id": "C02-partial-final",
+    "kind": "recording",
+    "given": "same remote binding partial then final then duplicate final",
+    "expect": "one stable utterance; later partial cannot revert final"
+  },
+  {
+    "id": "C03-late-generation",
+    "kind": "proposal",
+    "given": "generation epoch 0; recording transferred to epoch 1",
+    "expect": "STALE_INPUT; no publication"
+  },
+  {
+    "id": "C03-user-edit",
+    "kind": "proposal",
+    "given": "AI touches active IME and user-patched cell",
+    "expect": "review/defer intersections; unaffected selectors may commit"
+  },
+  {
+    "id": "C03-delete-intent",
+    "kind": "proposal",
+    "given": "same semantic key rediscovered after user deletion",
+    "expect": "no automatic resurrection across language/template patch"
+  },
+  {
+    "id": "C03-five-tiers",
+    "kind": "language",
+    "given": "Fact set changes while old tier generation pending",
+    "expect": "old result stale; requested tier differs from actual until ready"
+  },
+  {
+    "id": "C06-transfer-rollback",
+    "kind": "window",
+    "given": "view.move prepared; destination crashes before ready",
+    "expect": "old window and draft remain; single edit lease"
+  },
+  {
+    "id": "C07-demonstration",
+    "kind": "visualization",
+    "given": "user adjusts classroom parameter",
+    "expect": "demonstration/user_override; shared Fact untouched"
+  },
+  {
+    "id": "C08-equivalence",
+    "kind": "search",
+    "given": "same source text represented by original page and native object",
+    "expect": "one hit with dual anchors; identical string elsewhere stays distinct"
+  },
+  {
+    "id": "C08-delete-race",
+    "kind": "search",
+    "given": "delete after query before page/locate",
+    "expect": "SOURCE_DELETED or SEARCH_INVALIDATED, no old snippet"
+  },
+  {
+    "id": "C09-late-generation",
+    "kind": "focaus",
+    "given": "generation 1 returns after generation 2",
+    "expect": "no replacement; late history explicit only"
+  },
+  {
+    "id": "C09-double-cutoff",
+    "kind": "focaus",
+    "given": "body cutoff 300000; pointer advances to 330000",
+    "expect": "body hash unchanged; two evidence times visible"
+  }
+]

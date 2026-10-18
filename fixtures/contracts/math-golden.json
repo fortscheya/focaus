@@ -1,0 +1,303 @@
+[
+  {
+    "name": "cross-correlation",
+    "type": "Conv2dParameters",
+    "parameters": {
+      "operator_dimension": 2,
+      "scene_dimension": 3,
+      "operator_semantics": "cross_correlation",
+      "axis_order": "CHW",
+      "input": [
+        [
+          [
+            1,
+            2,
+            3
+          ],
+          [
+            4,
+            5,
+            6
+          ],
+          [
+            7,
+            8,
+            9
+          ]
+        ]
+      ],
+      "kernel": [
+        [
+          [
+            1,
+            0
+          ],
+          [
+            0,
+            -1
+          ]
+        ]
+      ],
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "dilation": [
+        1,
+        1
+      ],
+      "bias": null
+    },
+    "shape": [
+      2,
+      2
+    ],
+    "values": [
+      -4,
+      -4,
+      -4,
+      -4
+    ]
+  },
+  {
+    "name": "convolution-flips-kernel",
+    "type": "Conv2dParameters",
+    "parameters": {
+      "operator_dimension": 2,
+      "scene_dimension": 3,
+      "operator_semantics": "convolution",
+      "axis_order": "CHW",
+      "input": [
+        [
+          [
+            1,
+            2,
+            3
+          ],
+          [
+            4,
+            5,
+            6
+          ],
+          [
+            7,
+            8,
+            9
+          ]
+        ]
+      ],
+      "kernel": [
+        [
+          [
+            1,
+            0
+          ],
+          [
+            0,
+            -1
+          ]
+        ]
+      ],
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "dilation": [
+        1,
+        1
+      ],
+      "bias": null
+    },
+    "shape": [
+      2,
+      2
+    ],
+    "values": [
+      4,
+      4,
+      4,
+      4
+    ]
+  },
+  {
+    "name": "stride-two",
+    "type": "Conv2dParameters",
+    "parameters": {
+      "operator_dimension": 2,
+      "scene_dimension": 3,
+      "operator_semantics": "cross_correlation",
+      "axis_order": "CHW",
+      "input": [
+        [
+          [
+            1,
+            2,
+            3
+          ],
+          [
+            4,
+            5,
+            6
+          ],
+          [
+            7,
+            8,
+            9
+          ]
+        ]
+      ],
+      "kernel": [
+        [
+          [
+            1,
+            0
+          ],
+          [
+            0,
+            -1
+          ]
+        ]
+      ],
+      "stride": [
+        2,
+        2
+      ],
+      "padding": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "dilation": [
+        1,
+        1
+      ],
+      "bias": null
+    },
+    "shape": [
+      1,
+      1
+    ],
+    "values": [
+      -4
+    ]
+  },
+  {
+    "name": "padding-all",
+    "type": "Conv2dParameters",
+    "parameters": {
+      "operator_dimension": 2,
+      "scene_dimension": 3,
+      "operator_semantics": "cross_correlation",
+      "axis_order": "CHW",
+      "input": [
+        [
+          [
+            1,
+            2,
+            3
+          ],
+          [
+            4,
+            5,
+            6
+          ],
+          [
+            7,
+            8,
+            9
+          ]
+        ]
+      ],
+      "kernel": [
+        [
+          [
+            1,
+            0
+          ],
+          [
+            0,
+            -1
+          ]
+        ]
+      ],
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        1,
+        1,
+        1,
+        1
+      ],
+      "dilation": [
+        1,
+        1
+      ],
+      "bias": null
+    },
+    "shape": [
+      4,
+      4
+    ],
+    "values": [
+      -1,
+      -2,
+      -3,
+      0,
+      -4,
+      -4,
+      -4,
+      3,
+      -7,
+      -4,
+      -4,
+      6,
+      0,
+      7,
+      8,
+      9
+    ]
+  },
+  {
+    "name": "affine",
+    "type": "CurveParameters",
+    "parameters": {
+      "formula_id": "affine_v1",
+      "slope": 2,
+      "intercept": 1,
+      "x_min": -2,
+      "x_max": 2,
+      "samples": 5
+    },
+    "shape": [
+      5,
+      2
+    ],
+    "values": [
+      -2,
+      -3,
+      -1,
+      -1,
+      0,
+      1,
+      1,
+      3,
+      2,
+      5
+    ]
+  }
+]

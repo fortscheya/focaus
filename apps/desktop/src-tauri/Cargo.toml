@@ -1,0 +1,15 @@
+[package]
+name = "focaus-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "focaus_desktop"
+path = "src/lib.rs"
+
+[dependencies]
+focaus-contracts.workspace = true
+focaus-ai = { path = "../../../crates/focaus-ai" }
+serde.workspace = true
+serde_json.workspace = true

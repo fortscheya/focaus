@@ -1,0 +1,110 @@
+{
+  "format": "focaus.material",
+  "format_version": "1.0.0",
+  "material_id": "60a4f850-1901-552d-bc68-6ded55a33388",
+  "source_version_id": "907e6465-f701-53c2-9246-7a2d13a923a5",
+  "parse_version_id": "2cd9022f-5474-557e-814f-5b34dbb2fb8e",
+  "parent_parse_version_id": null,
+  "source_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "engine_build": "fixture/1.0.0",
+  "parse_profile": "light",
+  "requested_pages": [
+    0
+  ],
+  "pages": [
+    {
+      "page_id": "6073134a-8d98-5e96-999c-35dba3c74471",
+      "revision_id": "faf974eb-b1e1-53e1-9c5f-6c1ed14d841e",
+      "source_page_index": 0,
+      "display_label": "1",
+      "width": 720,
+      "height": 540,
+      "unit": "pt",
+      "rotation": 0,
+      "source_transform": [
+        1,
+        0,
+        0,
+        1,
+        0,
+        0
+      ],
+      "preview_resource_id": null,
+      "reading_order": [
+        "38123e65-1fab-5436-9d60-5855aaf59fd5"
+      ],
+      "region_ids": [
+        "c1fe7cf9-a4ae-514d-80ed-977d14e87969"
+      ],
+      "status": "basic_ready",
+      "errors": []
+    }
+  ],
+  "regions": [
+    {
+      "region_id": "c1fe7cf9-a4ae-514d-80ed-977d14e87969",
+      "page_id": "6073134a-8d98-5e96-999c-35dba3c74471",
+      "bbox": [
+        0,
+        0,
+        1,
+        1
+      ],
+      "object_ids": [
+        "38123e65-1fab-5436-9d60-5855aaf59fd5"
+      ],
+      "semantic_role": "body",
+      "parent_region_id": null
+    }
+  ],
+  "objects": [
+    {
+      "object_id": "38123e65-1fab-5436-9d60-5855aaf59fd5",
+      "revision_id": "1c786f23-d1b2-5006-8f57-729234f5d3dc",
+      "source_refs": [],
+      "region_ids": [
+        "c1fe7cf9-a4ae-514d-80ed-977d14e87969"
+      ],
+      "layout": {
+        "bounds": [
+          0,
+          0,
+          1,
+          1
+        ],
+        "z_order": 0,
+        "group_id": null,
+        "constraints": []
+      },
+      "extraction": "native",
+      "editability": "native",
+      "status": "complete",
+      "children": [],
+      "type": "text",
+      "content": {
+        "block_id": "1e69ca55-7464-5dd1-862f-67ab94f65083",
+        "runs": [
+          {
+            "element_id": "7984055b-6506-5589-89af-d8080565560e",
+            "text": "Straße 学习 é 😀"
+          }
+        ],
+        "level": 0
+      }
+    },
+    {
+      "object_id": "b68eb9ac-c4b4-593c-8304-98625cca3f68",
+      "type": "legacy_unknown_widget",
+      "payload": {
+        "kept": "opaque"
+      }
+    }
+  ],
+  "resources": [],
+  "corrections_applied": [],
+  "unresolved_conflicts": [],
+  "provenance": {
+    "synthetic": true
+  },
+  "completion": "partial"
+}

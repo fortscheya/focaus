@@ -1,10 +1,13 @@
 # Current State
 
 ## Active Development (D167/D168)
-- 2026-10-18已获产品开发和Git初始化授权，G0已初始化本地main；初始27文件白名单完成凭据模式/参考整份复制/体积检查和排除路径验证，提交待执行。
-- 当前总控01a14cae-d8ce-7053-bd12-737ea1bef020 / local；四路尚未创建，工具声明支持gpt-6.1-sol/max，实际配置未读回。
-- G1机器契约/迁移/fixtures未开始，G2–G5及所有产品V/U未运行。真实云调用/上传仍待授权；本地整合merge/cherry-pick确认待答。
-- 下列文档交付观察为此前阶段记录；其中非Git/不开发等阶段状态已由本节与D167/D168替代。
+- 2026-10-18 G0已完成初始化与白名单提交3312e4e；list_projects读回Git=true，总控在codex/focaus-integration。
+- G1已实现单源C01–C09类型/Schema、迁移schema1、host traits/stub、旧包适配/能力拒写/降级、45脱敏正反例和12运行场景说明；实际验证通过，当前准备提交共同基线。
+- generator一致性、11项Python/SQLite、5项Rust契约、37例TS/Ajv和RFC8785、前端占位生产构建均通过；产品V/U未执行。
+- Rust1.99.1位于忽略.local；Node用bundled runtime，pnpm11.25.0。根依赖/锁文件仅C维护，具体3D库未锁。
+- 四开发对话尚未创建；总控01a14cae-d8ce-7053-bd12-737ea1bef020 / local。工具声明支持gpt-6.1-sol/max；运行设置未读回。
+- 本地整合merge/cherry-pick问题待答；云调用/上传/费用未获得本阶段明确授权，不读取实际密钥。
+- 下列文档交付观察为此前阶段记录；非Git/只写文档等阶段限制由D167/D168替代。执行登记docs/DEVELOPMENT.md。
 
 ## What Exists
 - 2026-10-18完成D165七文档修订（README/ARCHITECTURE/DATA_MODEL_AND_FORMAT/INTERFACES/WORKSPACE_AND_FLOWS/VALIDATION/PARALLEL_DELIVERY），五份开发启动提示词同步。D160原工程基线保留有效部分，D162–D164新增需求已落实设计。

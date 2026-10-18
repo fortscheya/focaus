@@ -1,0 +1,3705 @@
+[
+  {
+    "name": "source-ref",
+    "type": "SourceRef",
+    "value": {
+      "entity_id": "e917d595-5885-5dc8-b208-72ac3e339a77",
+      "revision_id": "5248d652-69e2-503d-9ce0-b207137d76fd",
+      "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "selector": {
+        "kind": "text",
+        "block_id": "1e69ca55-7464-5dd1-862f-67ab94f65083",
+        "anchor": {
+          "left_element_id": null,
+          "right_element_id": null,
+          "element_ids": [
+            "7984055b-6506-5589-89af-d8080565560e"
+          ],
+          "scalar_range": {
+            "start": 0,
+            "end": 8
+          }
+        }
+      }
+    },
+    "valid": true,
+    "level": "schema"
+  },
+  {
+    "name": "snapshot",
+    "type": "InputSnapshot",
+    "value": {
+      "snapshot_id": "d638d087-b20d-507a-acdd-bf4c3f4ccc17",
+      "parent_snapshot_id": null,
+      "contract_version": "2.0.0",
+      "purpose": "catchup",
+      "target_id": "366578b4-2484-50ba-9f12-d534e5e9e0db",
+      "lesson_id": "663edcac-088a-5a53-a7d9-7219ca5d9d55",
+      "recording_id": "942a0e5b-6aee-5acb-a5c5-ee843025de74",
+      "assignment_epoch": 0,
+      "sources": [
+        {
+          "entity_id": "e917d595-5885-5dc8-b208-72ac3e339a77",
+          "revision_id": "5248d652-69e2-503d-9ce0-b207137d76fd",
+          "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "selector": {
+            "kind": "text",
+            "block_id": "1e69ca55-7464-5dd1-862f-67ab94f65083",
+            "anchor": {
+              "left_element_id": null,
+              "right_element_id": null,
+              "element_ids": [
+                "7984055b-6506-5589-89af-d8080565560e"
+              ],
+              "scalar_range": {
+                "start": 0,
+                "end": 8
+              }
+            }
+          }
+        }
+      ],
+      "attachment_set_revision": "c5e06bb8-eff0-5d26-bbff-d64bc6c3d730",
+      "fact_set_revision": null,
+      "target_base_revision": null,
+      "edit_revision": null,
+      "language_tier": 3,
+      "evidence_cutoff": [
+        {
+          "recording_id": "942a0e5b-6aee-5acb-a5c5-ee843025de74",
+          "end_ms": 300000,
+          "status": "known"
+        }
+      ],
+      "available_at": "2026-10-18T02:00:00Z",
+      "executor_id": "qwen-adapter",
+      "executor_version": "1.0.0",
+      "model_id": "qwen3.8-flash",
+      "region": "cn-beijing",
+      "prompt_version": "1.0.0",
+      "parameters_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "valid": true,
+    "level": "schema"
+  },
+  {
+    "name": "unassigned-recording",
+    "type": "RecordingSession",
+    "value": {
+      "recording_id": "942a0e5b-6aee-5acb-a5c5-ee843025de74",
+      "lesson_id": null,
+      "assignment_epoch": 0,
+      "state": "recording",
+      "capture_language_tier": 3,
+      "timeline_origin": "2026-10-18T02:00:00Z",
+      "durable_watermark_ms": 1000,
+      "revision_id": "8e343a93-a0dc-556d-8637-acff1b74ec78",
+      "entity_seq": 1
+    },
+    "valid": true,
+    "level": "schema"
+  },
+  {
+    "name": "gap",
+    "type": "AudioSpan",
+    "value": {
+      "audio_span_id": "e1f412f1-c5a8-5771-9b95-9cbe38f05852",
+      "recording_id": "942a0e5b-6aee-5acb-a5c5-ee843025de74",
+      "asset_id": null,
+      "track_id": null,
+      "frame_range": null,
+      "timeline_range": {
+        "start_ms": 1000,
+        "end_ms": 2000
+      },
+      "mapping_revision_id": null,
+      "coverage_status": "capture_gap",
+      "asr_coverage": "unsubmitted"
+    },
+    "valid": true,
+    "level": "schema"
+  },
+  {
+    "name": "conv2d",
+    "type": "Conv2dParameters",
+    "value": {
+      "operator_dimension": 2,
+      "scene_dimension": 3,
+      "operator_semantics": "cross_correlation",
+      "axis_order": "CHW",
+      "input": [
+        [
+          [
+            1,
+            2,
+            3
+          ],
+          [
+            4,
+            5,
+            6
+          ],
+          [
+            7,
+            8,
+            9
+          ]
+        ]
+      ],
+      "kernel": [
+        [
+          [
+            1,
+            0
+          ],
+          [
+            0,
+            -1
+          ]
+        ]
+      ],
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "dilation": [
+        1,
+        1
+      ],
+      "bias": null
+    },
+    "valid": true,
+    "level": "schema"
+  },
+  {
+    "name": "curve",
+    "type": "CurveParameters",
+    "value": {
+      "formula_id": "affine_v1",
+      "slope": 2,
+      "intercept": 1,
+      "x_min": -2,
+      "x_max": 2,
+      "samples": 5
+    },
+    "valid": true,
+    "level": "schema"
+  },
+  {
+    "name": "visualization",
+    "type": "VisualizationContent",
+    "value": {
+      "object_id": "ec6ff61b-4cb0-5793-8cfd-88aaf8ed9764",
+      "revision_id": "ff766f22-bfd2-549c-bec3-0a86997987a1",
+      "parent_revision_ids": [],
+      "protocol": "focaus.visualization",
+      "protocol_version": "1.0.0",
+      "template_id": "conv2d_spatial",
+      "template_version": "1.0.0",
+      "registry_revision": "1.0.0",
+      "concept_fact_ids": [
+        "5f64e716-c5bb-5464-9d4e-6d5ba3eafe65"
+      ],
+      "definition_ids": [],
+      "symbol_binding_ids": [],
+      "scope_id": "87b77af0-a570-51d2-b69c-e666d1884a1e",
+      "semantic_key": "fixture-convolution-purpose",
+      "purpose": "explain sliding window",
+      "placement_anchor": {
+        "kind": "text",
+        "block_id": "1e69ca55-7464-5dd1-862f-67ab94f65083",
+        "anchor": {
+          "left_element_id": null,
+          "right_element_id": null,
+          "element_ids": [
+            "7984055b-6506-5589-89af-d8080565560e"
+          ],
+          "scalar_range": {
+            "start": 0,
+            "end": 8
+          }
+        }
+      },
+      "parameters": {
+        "operator_dimension": 2,
+        "scene_dimension": 3,
+        "operator_semantics": "cross_correlation",
+        "axis_order": "CHW",
+        "input": [
+          [
+            [
+              1,
+              2,
+              3
+            ],
+            [
+              4,
+              5,
+              6
+            ],
+            [
+              7,
+              8,
+              9
+            ]
+          ]
+        ],
+        "kernel": [
+          [
+            [
+              1,
+              0
+            ],
+            [
+              0,
+              -1
+            ]
+          ]
+        ],
+        "stride": [
+          1,
+          1
+        ],
+        "padding": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "dilation": [
+          1,
+          1
+        ],
+        "bias": null
+      },
+      "parameter_schema_version": "1.0.0",
+      "value_bindings": [
+        {
+          "binding_id": "23de2480-047e-537e-95a6-3aaa8ad8e8ab",
+          "parameter_path": "input",
+          "value_origin": "demonstration",
+          "value": [
+            [
+              [
+                1,
+                2,
+                3
+              ],
+              [
+                4,
+                5,
+                6
+              ],
+              [
+                7,
+                8,
+                9
+              ]
+            ]
+          ],
+          "unit": null,
+          "source_refs": [],
+          "dependency_ids": [],
+          "formula_id": null,
+          "scope_id": "87b77af0-a570-51d2-b69c-e666d1884a1e",
+          "unknown_reason": null,
+          "user_override": false
+        }
+      ],
+      "computation": {
+        "algorithm_id": "conv2d_v1",
+        "algorithm_version": "1.0.0",
+        "operator_semantics": "cross_correlation",
+        "formula_id": "conv2d_v1",
+        "input_shape": [
+          1,
+          3,
+          3
+        ],
+        "output_shape": [
+          2,
+          2
+        ],
+        "precision_policy_id": "f64_abs_1e-9_rel_1e-9",
+        "dependency_binding_ids": []
+      },
+      "resources": [],
+      "source_refs": [
+        {
+          "entity_id": "e917d595-5885-5dc8-b208-72ac3e339a77",
+          "revision_id": "5248d652-69e2-503d-9ce0-b207137d76fd",
+          "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "selector": {
+            "kind": "text",
+            "block_id": "1e69ca55-7464-5dd1-862f-67ab94f65083",
+            "anchor": {
+              "left_element_id": null,
+              "right_element_id": null,
+              "element_ids": [
+                "7984055b-6506-5589-89af-d8080565560e"
+              ],
+              "scalar_range": {
+                "start": 0,
+                "end": 8
+              }
+            }
+          }
+        }
+      ],
+      "snapshot_id": "d638d087-b20d-507a-acdd-bf4c3f4ccc17",
+      "fact_set_revision": "ccec9cc4-e2c4-5090-bbfe-cde000bc21aa",
+      "interaction_state": {
+        "selected_input_ids": [],
+        "selected_output_ids": [],
+        "step_index": 0,
+        "camera": null,
+        "user_parameter_overrides": []
+      },
+      "presentation_by_tier": [
+        {
+          "tier": 1,
+          "label": "演示二维算子",
+          "description": "自制数据，非课堂事实",
+          "sync_status": "ready"
+        },
+        {
+          "tier": 2,
+          "label": "演示二维算子",
+          "description": "自制数据，非课堂事实",
+          "sync_status": "ready"
+        },
+        {
+          "tier": 3,
+          "label": "演示二维算子",
+          "description": "自制数据，非课堂事实",
+          "sync_status": "ready"
+        },
+        {
+          "tier": 4,
+          "label": "演示二维算子",
+          "description": "自制数据，非课堂事实",
+          "sync_status": "ready"
+        },
+        {
+          "tier": 5,
+          "label": "演示二维算子",
+          "description": "自制数据，非课堂事实",
+          "sync_status": "ready"
+        }
+      ],
+      "generation_status": "ready",
+      "validation": {
+        "checks": {
+          "schema": "pass",
+          "source": "pass",
+          "semantic": "pass",
+          "math": "pass"
+        },
+        "validator_version": "1.0.0",
+        "parameters_hash": "abe04492f8b98d50d0cac1fc5105af50c5c51d89d108c9ca5dc6c66d78217aef",
+        "validated_revision": "ff766f22-bfd2-549c-bec3-0a86997987a1",
+        "diagnostics": []
+      },
+      "fallback": {
+        "preview_resource_id": null,
+        "description": "相同参数的二维矩阵和乘加",
+        "table": [
+          [
+            "-4",
+            "-4"
+          ],
+          [
+            "-4",
+            "-4"
+          ]
+        ]
+      }
+    },
+    "valid": true,
+    "level": "schema"
+  },
+  {
+    "name": "material-partial",
+    "type": "MaterialManifest",
+    "value": {
+      "format": "focaus.material",
+      "format_version": "2.0.0",
+      "material_id": "60a4f850-1901-552d-bc68-6ded55a33388",
+      "source_version_id": "907e6465-f701-53c2-9246-7a2d13a923a5",
+      "parse_version_id": "2cd9022f-5474-557e-814f-5b34dbb2fb8e",
+      "parent_parse_version_id": null,
+      "source_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "engine_build": "fixture/1.0.0",
+      "parse_profile": "light",
+      "requested_pages": [
+        0
+      ],
+      "pages": [
+        {
+          "page_id": "6073134a-8d98-5e96-999c-35dba3c74471",
+          "revision_id": "faf974eb-b1e1-53e1-9c5f-6c1ed14d841e",
+          "source_page_index": 0,
+          "display_label": "1",
+          "width": 720,
+          "height": 540,
+          "unit": "pt",
+          "rotation": 0,
+          "source_transform": [
+            1,
+            0,
+            0,
+            1,
+            0,
+            0
+          ],
+          "preview_resource_id": null,
+          "reading_order": [
+            "38123e65-1fab-5436-9d60-5855aaf59fd5"
+          ],
+          "region_ids": [
+            "c1fe7cf9-a4ae-514d-80ed-977d14e87969"
+          ],
+          "status": "basic_ready",
+          "errors": []
+        }
+      ],
+      "regions": [
+        {
+          "region_id": "c1fe7cf9-a4ae-514d-80ed-977d14e87969",
+          "page_id": "6073134a-8d98-5e96-999c-35dba3c74471",
+          "bbox": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "object_ids": [
+            "38123e65-1fab-5436-9d60-5855aaf59fd5"
+          ],
+          "semantic_role": "body",
+          "parent_region_id": null
+        }
+      ],
+      "objects": [
+        {
+          "object_id": "38123e65-1fab-5436-9d60-5855aaf59fd5",
+          "revision_id": "1c786f23-d1b2-5006-8f57-729234f5d3dc",
+          "source_refs": [],
+          "region_ids": [
+            "c1fe7cf9-a4ae-514d-80ed-977d14e87969"
+          ],
+          "layout": {
+            "bounds": [
+              0,
+              0,
+              1,
+              1
+            ],
+            "z_order": 0,
+            "group_id": null,
+            "constraints": []
+          },
+          "extraction": "native",
+          "editability": "native",
+          "status": "complete",
+          "children": [],
+          "type": "text",
+          "content": {
+            "block_id": "1e69ca55-7464-5dd1-862f-67ab94f65083",
+            "runs": [
+              {
+                "element_id": "7984055b-6506-5589-89af-d8080565560e",
+                "text": "Straße 学习 é 😀"
+              }
+            ],
+            "level": 0
+          }
+        }
+      ],
+      "resources": [],
+      "corrections_applied": [],
+      "unresolved_conflicts": [],
+      "provenance": {
+        "synthetic": true
+      },
+      "completion": "partial",
+      "search_units": [],
+      "search_coverage": {
+        "requested_pages": [
+          "6073134a-8d98-5e96-999c-35dba3c74471"
+        ],
+        "processed_pages": [],
+        "unprocessed": [
+          {
+            "page_id": "6073134a-8d98-5e96-999c-35dba3c74471",
+            "region_id": null,
+            "reason": "fixture_not_extracted"
+          }
+        ],
+        "failed": [],
+        "state": "partial"
+      }
+    },
+    "valid": true,
+    "level": "schema"
+  },
+  {
+    "name": "focaus-bridge",
+    "type": "CatchupResult",
+    "value": {
+      "result_semantics": "focaus_context_v2",
+      "result_id": "d6f119e4-9fda-5a31-b129-2b8aa119f1fc",
+      "request_generation": 2,
+      "snapshot_id": "d638d087-b20d-507a-acdd-bf4c3f4ccc17",
+      "body_revision_id": "6098efc8-c017-5220-8dc0-7a17895967e9",
+      "requested_window": {
+        "recording_id": "942a0e5b-6aee-5acb-a5c5-ee843025de74",
+        "start_ms": 0,
+        "end_ms": 300000,
+        "start_source": null
+      },
+      "effective_window": {
+        "recording_id": "942a0e5b-6aee-5acb-a5c5-ee843025de74",
+        "start_ms": 0,
+        "end_ms": 300000,
+        "start_source": null
+      },
+      "estimate_basis": "unknown; five-minute default",
+      "current_focus": {
+        "topic": "合成卷积例子",
+        "problem": "如何计算当前输出格",
+        "activity": "example",
+        "step": "逐项乘加",
+        "source_refs": [
+          {
+            "entity_id": "e917d595-5885-5dc8-b208-72ac3e339a77",
+            "revision_id": "5248d652-69e2-503d-9ce0-b207137d76fd",
+            "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": {
+              "kind": "text",
+              "block_id": "1e69ca55-7464-5dd1-862f-67ab94f65083",
+              "anchor": {
+                "left_element_id": null,
+                "right_element_id": null,
+                "element_ids": [
+                  "7984055b-6506-5589-89af-d8080565560e"
+                ],
+                "scalar_range": {
+                  "start": 0,
+                  "end": 8
+                }
+              }
+            }
+          }
+        ],
+        "status": "supported"
+      },
+      "path_nodes": [
+        {
+          "node_id": "current",
+          "role": "current",
+          "fact_ids": [
+            "5f64e716-c5bb-5464-9d4e-6d5ba3eafe65"
+          ],
+          "definition_ids": [],
+          "binding_ids": [],
+          "body_block_ids": [
+            "237f2764-2bd0-5203-b9f6-e8a4d4f958d6"
+          ],
+          "evidence_role": "teacher_path",
+          "source_refs": [
+            {
+              "entity_id": "e917d595-5885-5dc8-b208-72ac3e339a77",
+              "revision_id": "5248d652-69e2-503d-9ce0-b207137d76fd",
+              "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "selector": {
+                "kind": "text",
+                "block_id": "1e69ca55-7464-5dd1-862f-67ab94f65083",
+                "anchor": {
+                  "left_element_id": null,
+                  "right_element_id": null,
+                  "element_ids": [
+                    "7984055b-6506-5589-89af-d8080565560e"
+                  ],
+                  "scalar_range": {
+                    "start": 0,
+                    "end": 8
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "node_id": "bridge",
+          "role": "bridge",
+          "fact_ids": [],
+          "definition_ids": [],
+          "binding_ids": [],
+          "body_block_ids": [
+            "237f2764-2bd0-5203-b9f6-e8a4d4f958d6"
+          ],
+          "evidence_role": "system_explanation",
+          "source_refs": [
+            {
+              "entity_id": "e917d595-5885-5dc8-b208-72ac3e339a77",
+              "revision_id": "5248d652-69e2-503d-9ce0-b207137d76fd",
+              "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "selector": {
+                "kind": "text",
+                "block_id": "1e69ca55-7464-5dd1-862f-67ab94f65083",
+                "anchor": {
+                  "left_element_id": null,
+                  "right_element_id": null,
+                  "element_ids": [
+                    "7984055b-6506-5589-89af-d8080565560e"
+                  ],
+                  "scalar_range": {
+                    "start": 0,
+                    "end": 8
+                  }
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "path_edges": [
+        {
+          "from_node_id": "bridge",
+          "to_node_id": "current",
+          "relation": "dependency",
+          "source_refs": [
+            {
+              "entity_id": "e917d595-5885-5dc8-b208-72ac3e339a77",
+              "revision_id": "5248d652-69e2-503d-9ce0-b207137d76fd",
+              "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "selector": {
+                "kind": "text",
+                "block_id": "1e69ca55-7464-5dd1-862f-67ab94f65083",
+                "anchor": {
+                  "left_element_id": null,
+                  "right_element_id": null,
+                  "element_ids": [
+                    "7984055b-6506-5589-89af-d8080565560e"
+                  ],
+                  "scalar_range": {
+                    "start": 0,
+                    "end": 8
+                  }
+                }
+              }
+            }
+          ],
+          "certainty": "supported"
+        }
+      ],
+      "prerequisites": [
+        {
+          "definition_id": "3d2b5366-dea2-51bc-b5db-58ab9553d7fc",
+          "binding_id": null,
+          "fact_id": null,
+          "reason": "理解求和需要先前定义",
+          "source_refs": [
+            {
+              "entity_id": "e917d595-5885-5dc8-b208-72ac3e339a77",
+              "revision_id": "5248d652-69e2-503d-9ce0-b207137d76fd",
+              "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "selector": {
+                "kind": "text",
+                "block_id": "1e69ca55-7464-5dd1-862f-67ab94f65083",
+                "anchor": {
+                  "left_element_id": null,
+                  "right_element_id": null,
+                  "element_ids": [
+                    "7984055b-6506-5589-89af-d8080565560e"
+                  ],
+                  "scalar_range": {
+                    "start": 0,
+                    "end": 8
+                  }
+                }
+              }
+            }
+          ],
+          "scope_id": "87b77af0-a570-51d2-b69c-e666d1884a1e",
+          "outside_window": true
+        }
+      ],
+      "prerequisites_reason": null,
+      "body": [
+        {
+          "block_id": "237f2764-2bd0-5203-b9f6-e8a4d4f958d6",
+          "text": "合成示例：从当前滑窗的各项乘积相加，接回当前输出格。"
+        }
+      ],
+      "presentation_tier": 3,
+      "body_evidence_cutoff": [
+        {
+          "recording_id": "942a0e5b-6aee-5acb-a5c5-ee843025de74",
+          "end_ms": 300000,
+          "status": "known"
+        }
+      ],
+      "body_generated_at": "2026-10-18T02:00:00Z",
+      "progress_at_trigger": null,
+      "progress_unavailable_reason": "fixture no progress",
+      "progress_binding": {
+        "lesson_id": "663edcac-088a-5a53-a7d9-7219ca5d9d55",
+        "recording_id": "942a0e5b-6aee-5acb-a5c5-ee843025de74",
+        "assignment_epoch": 0,
+        "no_pointer_reason": null
+      },
+      "coverage": {
+        "audio_gaps": [],
+        "asr_gaps": [],
+        "material_supplement_used": false,
+        "range_status": "complete"
+      },
+      "limitations": [],
+      "completion_status": "complete",
+      "triggered_at": "2026-10-18T02:00:00Z",
+      "completed_at": "2026-10-18T02:00:00Z",
+      "displayed_complete_elapsed_ms": 14000
+    },
+    "valid": true,
+    "level": "schema"
+  },
+  {
+    "name": "search-unprocessed",
+    "type": "SearchPage",
+    "value": {
+      "search_id": "60d6250f-e8b3-5f18-bb3e-3272c3a034cf",
+      "query_seq": 3,
+      "scope_snapshot_id": "541f3e30-6e79-52b8-80de-39313419578c",
+      "hits": [],
+      "total_count": 0,
+      "count_status": "provisional",
+      "coverage": {
+        "scope_snapshot_id": "541f3e30-6e79-52b8-80de-39313419578c",
+        "required_units": 1,
+        "indexed_units": 0,
+        "required_pages": [
+          "6073134a-8d98-5e96-999c-35dba3c74471"
+        ],
+        "indexed_pages": [],
+        "unprocessed": [
+          {
+            "page_id": "6073134a-8d98-5e96-999c-35dba3c74471",
+            "region_id": null,
+            "reason": "not_ocr"
+          }
+        ],
+        "failed": [],
+        "stale": [],
+        "state": "partial",
+        "source_extraction_revision": "2cd9022f-5474-557e-814f-5b34dbb2fb8e"
+      },
+      "index_generation": 1,
+      "visibility_epoch": 0,
+      "next_cursor": null
+    },
+    "valid": true,
+    "level": "schema"
+  },
+  {
+    "name": "user-patch",
+    "type": "UserPatch",
+    "value": {
+      "patch_id": "4f15f2f1-6a14-5061-be95-95c05fb41bf9",
+      "target_id": "366578b4-2484-50ba-9f12-d534e5e9e0db",
+      "base_revision": "83d42085-d1c9-55f3-bc8f-5b29cc3bbd92",
+      "operation": "text_replace",
+      "selector": {
+        "kind": "text",
+        "block_id": "1e69ca55-7464-5dd1-862f-67ab94f65083",
+        "anchor": {
+          "left_element_id": null,
+          "right_element_id": null,
+          "element_ids": [
+            "7984055b-6506-5589-89af-d8080565560e"
+          ],
+          "scalar_range": {
+            "start": 0,
+            "end": 8
+          }
+        }
+      },
+      "before_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "after_value": "用户修改",
+      "author": "user",
+      "intent": "protect edited text",
+      "undo_group_id": "c747a3a1-8fa4-56b3-abe0-41f8679bb1bc",
+      "created_at": "2026-10-18T02:00:00Z"
+    },
+    "valid": true,
+    "level": "schema"
+  },
+  {
+    "name": "capabilities",
+    "type": "Capabilities",
+    "value": {
+      "supported_contract_majors": [
+        2
+      ],
+      "supported_material_majors": [
+        2
+      ],
+      "visualization_protocol_majors": [
+        1
+      ],
+      "templates": {
+        "function_curve_2d": [
+          "1.0.0"
+        ],
+        "conv2d_spatial": [
+          "1.0.0"
+        ]
+      },
+      "search_projection_versions": [
+        1
+      ],
+      "focaus_result_semantics": [
+        "focaus_context_v2"
+      ]
+    },
+    "valid": true,
+    "level": "schema"
+  },
+  {
+    "name": "invalid-source-uuid",
+    "type": "SourceRef",
+    "value": {
+      "entity_id": "page-1",
+      "revision_id": "5248d652-69e2-503d-9ce0-b207137d76fd",
+      "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "selector": {
+        "kind": "text",
+        "block_id": "1e69ca55-7464-5dd1-862f-67ab94f65083",
+        "anchor": {
+          "left_element_id": null,
+          "right_element_id": null,
+          "element_ids": [
+            "7984055b-6506-5589-89af-d8080565560e"
+          ],
+          "scalar_range": {
+            "start": 0,
+            "end": 8
+          }
+        }
+      }
+    },
+    "valid": false,
+    "level": "schema"
+  },
+  {
+    "name": "missing-source-revision",
+    "type": "SourceRef",
+    "value": {
+      "entity_id": "e917d595-5885-5dc8-b208-72ac3e339a77",
+      "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "selector": {
+        "kind": "text",
+        "block_id": "1e69ca55-7464-5dd1-862f-67ab94f65083",
+        "anchor": {
+          "left_element_id": null,
+          "right_element_id": null,
+          "element_ids": [
+            "7984055b-6506-5589-89af-d8080565560e"
+          ],
+          "scalar_range": {
+            "start": 0,
+            "end": 8
+          }
+        }
+      }
+    },
+    "valid": false,
+    "level": "schema"
+  },
+  {
+    "name": "unknown-contract-major",
+    "type": "InputSnapshot",
+    "value": {
+      "snapshot_id": "d638d087-b20d-507a-acdd-bf4c3f4ccc17",
+      "parent_snapshot_id": null,
+      "contract_version": "3.0.0",
+      "purpose": "catchup",
+      "target_id": "366578b4-2484-50ba-9f12-d534e5e9e0db",
+      "lesson_id": "663edcac-088a-5a53-a7d9-7219ca5d9d55",
+      "recording_id": "942a0e5b-6aee-5acb-a5c5-ee843025de74",
+      "assignment_epoch": 0,
+      "sources": [
+        {
+          "entity_id": "e917d595-5885-5dc8-b208-72ac3e339a77",
+          "revision_id": "5248d652-69e2-503d-9ce0-b207137d76fd",
+          "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "selector": {
+            "kind": "text",
+            "block_id": "1e69ca55-7464-5dd1-862f-67ab94f65083",
+            "anchor": {
+              "left_element_id": null,
+              "right_element_id": null,
+              "element_ids": [
+                "7984055b-6506-5589-89af-d8080565560e"
+              ],
+              "scalar_range": {
+                "start": 0,
+                "end": 8
+              }
+            }
+          }
+        }
+      ],
+      "attachment_set_revision": "c5e06bb8-eff0-5d26-bbff-d64bc6c3d730",
+      "fact_set_revision": null,
+      "target_base_revision": null,
+      "edit_revision": null,
+      "language_tier": 3,
+      "evidence_cutoff": [
+        {
+          "recording_id": "942a0e5b-6aee-5acb-a5c5-ee843025de74",
+          "end_ms": 300000,
+          "status": "known"
+        }
+      ],
+      "available_at": "2026-10-18T02:00:00Z",
+      "executor_id": "qwen-adapter",
+      "executor_version": "1.0.0",
+      "model_id": "qwen3.8-flash",
+      "region": "cn-beijing",
+      "prompt_version": "1.0.0",
+      "parameters_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "valid": false,
+    "level": "schema"
+  },
+  {
+    "name": "missing-local-executor",
+    "type": "InputSnapshot",
+    "value": {
+      "snapshot_id": "d638d087-b20d-507a-acdd-bf4c3f4ccc17",
+      "parent_snapshot_id": null,
+      "contract_version": "2.0.0",
+      "purpose": "catchup",
+      "target_id": "366578b4-2484-50ba-9f12-d534e5e9e0db",
+      "lesson_id": "663edcac-088a-5a53-a7d9-7219ca5d9d55",
+      "recording_id": "942a0e5b-6aee-5acb-a5c5-ee843025de74",
+      "assignment_epoch": 0,
+      "sources": [
+        {
+          "entity_id": "e917d595-5885-5dc8-b208-72ac3e339a77",
+          "revision_id": "5248d652-69e2-503d-9ce0-b207137d76fd",
+          "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "selector": {
+            "kind": "text",
+            "block_id": "1e69ca55-7464-5dd1-862f-67ab94f65083",
+            "anchor": {
+              "left_element_id": null,
+              "right_element_id": null,
+              "element_ids": [
+                "7984055b-6506-5589-89af-d8080565560e"
+              ],
+              "scalar_range": {
+                "start": 0,
+                "end": 8
+              }
+            }
+          }
+        }
+      ],
+      "attachment_set_revision": "c5e06bb8-eff0-5d26-bbff-d64bc6c3d730",
+      "fact_set_revision": null,
+      "target_base_revision": null,
+      "edit_revision": null,
+      "language_tier": 3,
+      "evidence_cutoff": [
+        {
+          "recording_id": "942a0e5b-6aee-5acb-a5c5-ee843025de74",
+          "end_ms": 300000,
+          "status": "known"
+        }
+      ],
+      "available_at": "2026-10-18T02:00:00Z",
+      "executor_id": "qwen-adapter",
+      "model_id": "qwen3.8-flash",
+      "region": "cn-beijing",
+      "prompt_version": "1.0.0",
+      "parameters_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    "valid": false,
+    "level": "schema"
+  },
+  {
+    "name": "zero-stride",
+    "type": "Conv2dParameters",
+    "value": {
+      "operator_dimension": 2,
+      "scene_dimension": 3,
+      "operator_semantics": "cross_correlation",
+      "axis_order": "CHW",
+      "input": [
+        [
+          [
+            1,
+            2,
+            3
+          ],
+          [
+            4,
+            5,
+            6
+          ],
+          [
+            7,
+            8,
+            9
+          ]
+        ]
+      ],
+      "kernel": [
+        [
+          [
+            1,
+            0
+          ],
+          [
+            0,
+            -1
+          ]
+        ]
+      ],
+      "stride": [
+        0,
+        1
+      ],
+      "padding": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "dilation": [
+        1,
+        1
+      ],
+      "bias": null
+    },
+    "valid": false,
+    "level": "schema"
+  },
+  {
+    "name": "negative-padding",
+    "type": "Conv2dParameters",
+    "value": {
+      "operator_dimension": 2,
+      "scene_dimension": 3,
+      "operator_semantics": "cross_correlation",
+      "axis_order": "CHW",
+      "input": [
+        [
+          [
+            1,
+            2,
+            3
+          ],
+          [
+            4,
+            5,
+            6
+          ],
+          [
+            7,
+            8,
+            9
+          ]
+        ]
+      ],
+      "kernel": [
+        [
+          [
+            1,
+            0
+          ],
+          [
+            0,
+            -1
+          ]
+        ]
+      ],
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        -1,
+        0,
+        0,
+        0
+      ],
+      "dilation": [
+        1,
+        1
+      ],
+      "bias": null
+    },
+    "valid": false,
+    "level": "schema"
+  },
+  {
+    "name": "ragged-input",
+    "type": "Conv2dParameters",
+    "value": {
+      "operator_dimension": 2,
+      "scene_dimension": 3,
+      "operator_semantics": "cross_correlation",
+      "axis_order": "CHW",
+      "input": [
+        [
+          [
+            1,
+            2
+          ],
+          [
+            4,
+            5,
+            6
+          ],
+          [
+            7,
+            8,
+            9
+          ]
+        ]
+      ],
+      "kernel": [
+        [
+          [
+            1,
+            0
+          ],
+          [
+            0,
+            -1
+          ]
+        ]
+      ],
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "dilation": [
+        1,
+        1
+      ],
+      "bias": null
+    },
+    "valid": false,
+    "level": "semantic"
+  },
+  {
+    "name": "unsupported-dilation",
+    "type": "Conv2dParameters",
+    "value": {
+      "operator_dimension": 2,
+      "scene_dimension": 3,
+      "operator_semantics": "cross_correlation",
+      "axis_order": "CHW",
+      "input": [
+        [
+          [
+            1,
+            2,
+            3
+          ],
+          [
+            4,
+            5,
+            6
+          ],
+          [
+            7,
+            8,
+            9
+          ]
+        ]
+      ],
+      "kernel": [
+        [
+          [
+            1,
+            0
+          ],
+          [
+            0,
+            -1
+          ]
+        ]
+      ],
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "dilation": [
+        2,
+        2
+      ],
+      "bias": null
+    },
+    "valid": false,
+    "level": "semantic"
+  },
+  {
+    "name": "missing-search-coverage",
+    "type": "MaterialManifest",
+    "value": {
+      "format": "focaus.material",
+      "format_version": "2.0.0",
+      "material_id": "60a4f850-1901-552d-bc68-6ded55a33388",
+      "source_version_id": "907e6465-f701-53c2-9246-7a2d13a923a5",
+      "parse_version_id": "2cd9022f-5474-557e-814f-5b34dbb2fb8e",
+      "parent_parse_version_id": null,
+      "source_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "engine_build": "fixture/1.0.0",
+      "parse_profile": "light",
+      "requested_pages": [
+        0
+      ],
+      "pages": [
+        {
+          "page_id": "6073134a-8d98-5e96-999c-35dba3c74471",
+          "revision_id": "faf974eb-b1e1-53e1-9c5f-6c1ed14d841e",
+          "source_page_index": 0,
+          "display_label": "1",
+          "width": 720,
+          "height": 540,
+          "unit": "pt",
+          "rotation": 0,
+          "source_transform": [
+            1,
+            0,
+            0,
+            1,
+            0,
+            0
+          ],
+          "preview_resource_id": null,
+          "reading_order": [
+            "38123e65-1fab-5436-9d60-5855aaf59fd5"
+          ],
+          "region_ids": [
+            "c1fe7cf9-a4ae-514d-80ed-977d14e87969"
+          ],
+          "status": "basic_ready",
+          "errors": []
+        }
+      ],
+      "regions": [
+        {
+          "region_id": "c1fe7cf9-a4ae-514d-80ed-977d14e87969",
+          "page_id": "6073134a-8d98-5e96-999c-35dba3c74471",
+          "bbox": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "object_ids": [
+            "38123e65-1fab-5436-9d60-5855aaf59fd5"
+          ],
+          "semantic_role": "body",
+          "parent_region_id": null
+        }
+      ],
+      "objects": [
+        {
+          "object_id": "38123e65-1fab-5436-9d60-5855aaf59fd5",
+          "revision_id": "1c786f23-d1b2-5006-8f57-729234f5d3dc",
+          "source_refs": [],
+          "region_ids": [
+            "c1fe7cf9-a4ae-514d-80ed-977d14e87969"
+          ],
+          "layout": {
+            "bounds": [
+              0,
+              0,
+              1,
+              1
+            ],
+            "z_order": 0,
+            "group_id": null,
+            "constraints": []
+          },
+          "extraction": "native",
+          "editability": "native",
+          "status": "complete",
+          "children": [],
+          "type": "text",
+          "content": {
+            "block_id": "1e69ca55-7464-5dd1-862f-67ab94f65083",
+            "runs": [
+              {
+                "element_id": "7984055b-6506-5589-89af-d8080565560e",
+                "text": "Straße 学习 é 😀"
+              }
+            ],
+            "level": 0
+          }
+        }
+      ],
+      "resources": [],
+      "corrections_applied": [],
+      "unresolved_conflicts": [],
+      "provenance": {
+        "synthetic": true
+      },
+      "completion": "partial",
+      "search_units": []
+    },
+    "valid": false,
+    "level": "schema"
+  },
+  {
+    "name": "missing-object-closure",
+    "type": "MaterialManifest",
+    "value": {
+      "format": "focaus.material",
+      "format_version": "2.0.0",
+      "material_id": "60a4f850-1901-552d-bc68-6ded55a33388",
+      "source_version_id": "907e6465-f701-53c2-9246-7a2d13a923a5",
+      "parse_version_id": "2cd9022f-5474-557e-814f-5b34dbb2fb8e",
+      "parent_parse_version_id": null,
+      "source_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "engine_build": "fixture/1.0.0",
+      "parse_profile": "light",
+      "requested_pages": [
+        0
+      ],
+      "pages": [
+        {
+          "page_id": "6073134a-8d98-5e96-999c-35dba3c74471",
+          "revision_id": "faf974eb-b1e1-53e1-9c5f-6c1ed14d841e",
+          "source_page_index": 0,
+          "display_label": "1",
+          "width": 720,
+          "height": 540,
+          "unit": "pt",
+          "rotation": 0,
+          "source_transform": [
+            1,
+            0,
+            0,
+            1,
+            0,
+            0
+          ],
+          "preview_resource_id": null,
+          "reading_order": [
+            "38123e65-1fab-5436-9d60-5855aaf59fd5"
+          ],
+          "region_ids": [
+            "c1fe7cf9-a4ae-514d-80ed-977d14e87969"
+          ],
+          "status": "basic_ready",
+          "errors": []
+        }
+      ],
+      "regions": [
+        {
+          "region_id": "c1fe7cf9-a4ae-514d-80ed-977d14e87969",
+          "page_id": "6073134a-8d98-5e96-999c-35dba3c74471",
+          "bbox": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "object_ids": [
+            "38123e65-1fab-5436-9d60-5855aaf59fd5",
+            "0947d150-ed61-532b-bdbe-c6240c8a5a8d"
+          ],
+          "semantic_role": "body",
+          "parent_region_id": null
+        }
+      ],
+      "objects": [
+        {
+          "object_id": "38123e65-1fab-5436-9d60-5855aaf59fd5",
+          "revision_id": "1c786f23-d1b2-5006-8f57-729234f5d3dc",
+          "source_refs": [],
+          "region_ids": [
+            "c1fe7cf9-a4ae-514d-80ed-977d14e87969"
+          ],
+          "layout": {
+            "bounds": [
+              0,
+              0,
+              1,
+              1
+            ],
+            "z_order": 0,
+            "group_id": null,
+            "constraints": []
+          },
+          "extraction": "native",
+          "editability": "native",
+          "status": "complete",
+          "children": [],
+          "type": "text",
+          "content": {
+            "block_id": "1e69ca55-7464-5dd1-862f-67ab94f65083",
+            "runs": [
+              {
+                "element_id": "7984055b-6506-5589-89af-d8080565560e",
+                "text": "Straße 学习 é 😀"
+              }
+            ],
+            "level": 0
+          }
+        }
+      ],
+      "resources": [],
+      "corrections_applied": [],
+      "unresolved_conflicts": [],
+      "provenance": {
+        "synthetic": true
+      },
+      "completion": "partial",
+      "search_units": [],
+      "search_coverage": {
+        "requested_pages": [
+          "6073134a-8d98-5e96-999c-35dba3c74471"
+        ],
+        "processed_pages": [],
+        "unprocessed": [
+          {
+            "page_id": "6073134a-8d98-5e96-999c-35dba3c74471",
+            "region_id": null,
+            "reason": "fixture_not_extracted"
+          }
+        ],
+        "failed": [],
+        "state": "partial"
+      }
+    },
+    "valid": false,
+    "level": "semantic"
+  },
+  {
+    "name": "partial-cannot-complete",
+    "type": "MaterialManifest",
+    "value": {
+      "format": "focaus.material",
+      "format_version": "2.0.0",
+      "material_id": "60a4f850-1901-552d-bc68-6ded55a33388",
+      "source_version_id": "907e6465-f701-53c2-9246-7a2d13a923a5",
+      "parse_version_id": "2cd9022f-5474-557e-814f-5b34dbb2fb8e",
+      "parent_parse_version_id": null,
+      "source_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "engine_build": "fixture/1.0.0",
+      "parse_profile": "light",
+      "requested_pages": [
+        0
+      ],
+      "pages": [
+        {
+          "page_id": "6073134a-8d98-5e96-999c-35dba3c74471",
+          "revision_id": "faf974eb-b1e1-53e1-9c5f-6c1ed14d841e",
+          "source_page_index": 0,
+          "display_label": "1",
+          "width": 720,
+          "height": 540,
+          "unit": "pt",
+          "rotation": 0,
+          "source_transform": [
+            1,
+            0,
+            0,
+            1,
+            0,
+            0
+          ],
+          "preview_resource_id": null,
+          "reading_order": [
+            "38123e65-1fab-5436-9d60-5855aaf59fd5"
+          ],
+          "region_ids": [
+            "c1fe7cf9-a4ae-514d-80ed-977d14e87969"
+          ],
+          "status": "basic_ready",
+          "errors": []
+        }
+      ],
+      "regions": [
+        {
+          "region_id": "c1fe7cf9-a4ae-514d-80ed-977d14e87969",
+          "page_id": "6073134a-8d98-5e96-999c-35dba3c74471",
+          "bbox": [
+            0,
+            0,
+            1,
+            1
+          ],
+          "object_ids": [
+            "38123e65-1fab-5436-9d60-5855aaf59fd5"
+          ],
+          "semantic_role": "body",
+          "parent_region_id": null
+        }
+      ],
+      "objects": [
+        {
+          "object_id": "38123e65-1fab-5436-9d60-5855aaf59fd5",
+          "revision_id": "1c786f23-d1b2-5006-8f57-729234f5d3dc",
+          "source_refs": [],
+          "region_ids": [
+            "c1fe7cf9-a4ae-514d-80ed-977d14e87969"
+          ],
+          "layout": {
+            "bounds": [
+              0,
+              0,
+              1,
+              1
+            ],
+            "z_order": 0,
+            "group_id": null,
+            "constraints": []
+          },
+          "extraction": "native",
+          "editability": "native",
+          "status": "complete",
+          "children": [],
+          "type": "text",
+          "content": {
+            "block_id": "1e69ca55-7464-5dd1-862f-67ab94f65083",
+            "runs": [
+              {
+                "element_id": "7984055b-6506-5589-89af-d8080565560e",
+                "text": "Straße 学习 é 😀"
+              }
+            ],
+            "level": 0
+          }
+        }
+      ],
+      "resources": [],
+      "corrections_applied": [],
+      "unresolved_conflicts": [],
+      "provenance": {
+        "synthetic": true
+      },
+      "completion": "complete",
+      "search_units": [],
+      "search_coverage": {
+        "requested_pages": [
+          "6073134a-8d98-5e96-999c-35dba3c74471"
+        ],
+        "processed_pages": [],
+        "unprocessed": [
+          {
+            "page_id": "6073134a-8d98-5e96-999c-35dba3c74471",
+            "region_id": null,
+            "reason": "fixture_not_extracted"
+          }
+        ],
+        "failed": [],
+        "state": "partial"
+      }
+    },
+    "valid": false,
+    "level": "semantic"
+  },
+  {
+    "name": "unknown-template-ready",
+    "type": "VisualizationContent",
+    "value": {
+      "object_id": "ec6ff61b-4cb0-5793-8cfd-88aaf8ed9764",
+      "revision_id": "ff766f22-bfd2-549c-bec3-0a86997987a1",
+      "parent_revision_ids": [],
+      "protocol": "focaus.visualization",
+      "protocol_version": "1.0.0",
+      "template_id": "remote_javascript",
+      "template_version": "1.0.0",
+      "registry_revision": "1.0.0",
+      "concept_fact_ids": [
+        "5f64e716-c5bb-5464-9d4e-6d5ba3eafe65"
+      ],
+      "definition_ids": [],
+      "symbol_binding_ids": [],
+      "scope_id": "87b77af0-a570-51d2-b69c-e666d1884a1e",
+      "semantic_key": "fixture-convolution-purpose",
+      "purpose": "explain sliding window",
+      "placement_anchor": {
+        "kind": "text",
+        "block_id": "1e69ca55-7464-5dd1-862f-67ab94f65083",
+        "anchor": {
+          "left_element_id": null,
+          "right_element_id": null,
+          "element_ids": [
+            "7984055b-6506-5589-89af-d8080565560e"
+          ],
+          "scalar_range": {
+            "start": 0,
+            "end": 8
+          }
+        }
+      },
+      "parameters": {
+        "operator_dimension": 2,
+        "scene_dimension": 3,
+        "operator_semantics": "cross_correlation",
+        "axis_order": "CHW",
+        "input": [
+          [
+            [
+              1,
+              2,
+              3
+            ],
+            [
+              4,
+              5,
+              6
+            ],
+            [
+              7,
+              8,
+              9
+            ]
+          ]
+        ],
+        "kernel": [
+          [
+            [
+              1,
+              0
+            ],
+            [
+              0,
+              -1
+            ]
+          ]
+        ],
+        "stride": [
+          1,
+          1
+        ],
+        "padding": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "dilation": [
+          1,
+          1
+        ],
+        "bias": null
+      },
+      "parameter_schema_version": "1.0.0",
+      "value_bindings": [
+        {
+          "binding_id": "23de2480-047e-537e-95a6-3aaa8ad8e8ab",
+          "parameter_path": "input",
+          "value_origin": "demonstration",
+          "value": [
+            [
+              [
+                1,
+                2,
+                3
+              ],
+              [
+                4,
+                5,
+                6
+              ],
+              [
+                7,
+                8,
+                9
+              ]
+            ]
+          ],
+          "unit": null,
+          "source_refs": [],
+          "dependency_ids": [],
+          "formula_id": null,
+          "scope_id": "87b77af0-a570-51d2-b69c-e666d1884a1e",
+          "unknown_reason": null,
+          "user_override": false
+        }
+      ],
+      "computation": {
+        "algorithm_id": "conv2d_v1",
+        "algorithm_version": "1.0.0",
+        "operator_semantics": "cross_correlation",
+        "formula_id": "conv2d_v1",
+        "input_shape": [
+          1,
+          3,
+          3
+        ],
+        "output_shape": [
+          2,
+          2
+        ],
+        "precision_policy_id": "f64_abs_1e-9_rel_1e-9",
+        "dependency_binding_ids": []
+      },
+      "resources": [],
+      "source_refs": [
+        {
+          "entity_id": "e917d595-5885-5dc8-b208-72ac3e339a77",
+          "revision_id": "5248d652-69e2-503d-9ce0-b207137d76fd",
+          "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "selector": {
+            "kind": "text",
+            "block_id": "1e69ca55-7464-5dd1-862f-67ab94f65083",
+            "anchor": {
+              "left_element_id": null,
+              "right_element_id": null,
+              "element_ids": [
+                "7984055b-6506-5589-89af-d8080565560e"
+              ],
+              "scalar_range": {
+                "start": 0,
+                "end": 8
+              }
+            }
+          }
+        }
+      ],
+      "snapshot_id": "d638d087-b20d-507a-acdd-bf4c3f4ccc17",
+      "fact_set_revision": "ccec9cc4-e2c4-5090-bbfe-cde000bc21aa",
+      "interaction_state": {
+        "selected_input_ids": [],
+        "selected_output_ids": [],
+        "step_index": 0,
+        "camera": null,
+        "user_parameter_overrides": []
+      },
+      "presentation_by_tier": [
+        {
+          "tier": 1,
+          "label": "演示二维算子",
+          "description": "自制数据，非课堂事实",
+          "sync_status": "ready"
+        },
+        {
+          "tier": 2,
+          "label": "演示二维算子",
+          "description": "自制数据，非课堂事实",
+          "sync_status": "ready"
+        },
+        {
+          "tier": 3,
+          "label": "演示二维算子",
+          "description": "自制数据，非课堂事实",
+          "sync_status": "ready"
+        },
+        {
+          "tier": 4,
+          "label": "演示二维算子",
+          "description": "自制数据，非课堂事实",
+          "sync_status": "ready"
+        },
+        {
+          "tier": 5,
+          "label": "演示二维算子",
+          "description": "自制数据，非课堂事实",
+          "sync_status": "ready"
+        }
+      ],
+      "generation_status": "ready",
+      "validation": {
+        "checks": {
+          "schema": "pass",
+          "source": "pass",
+          "semantic": "pass",
+          "math": "pass"
+        },
+        "validator_version": "1.0.0",
+        "parameters_hash": "abe04492f8b98d50d0cac1fc5105af50c5c51d89d108c9ca5dc6c66d78217aef",
+        "validated_revision": "ff766f22-bfd2-549c-bec3-0a86997987a1",
+        "diagnostics": []
+      },
+      "fallback": {
+        "preview_resource_id": null,
+        "description": "相同参数的二维矩阵和乘加",
+        "table": [
+          [
+            "-4",
+            "-4"
+          ],
+          [
+            "-4",
+            "-4"
+          ]
+        ]
+      }
+    },
+    "valid": false,
+    "level": "schema"
+  },
+  {
+    "name": "code-injection",
+    "type": "VisualizationContent",
+    "value": {
+      "object_id": "ec6ff61b-4cb0-5793-8cfd-88aaf8ed9764",
+      "revision_id": "ff766f22-bfd2-549c-bec3-0a86997987a1",
+      "parent_revision_ids": [],
+      "protocol": "focaus.visualization",
+      "protocol_version": "1.0.0",
+      "template_id": "conv2d_spatial",
+      "template_version": "1.0.0",
+      "registry_revision": "1.0.0",
+      "concept_fact_ids": [
+        "5f64e716-c5bb-5464-9d4e-6d5ba3eafe65"
+      ],
+      "definition_ids": [],
+      "symbol_binding_ids": [],
+      "scope_id": "87b77af0-a570-51d2-b69c-e666d1884a1e",
+      "semantic_key": "fixture-convolution-purpose",
+      "purpose": "explain sliding window",
+      "placement_anchor": {
+        "kind": "text",
+        "block_id": "1e69ca55-7464-5dd1-862f-67ab94f65083",
+        "anchor": {
+          "left_element_id": null,
+          "right_element_id": null,
+          "element_ids": [
+            "7984055b-6506-5589-89af-d8080565560e"
+          ],
+          "scalar_range": {
+            "start": 0,
+            "end": 8
+          }
+        }
+      },
+      "parameters": {
+        "operator_dimension": 2,
+        "scene_dimension": 3,
+        "operator_semantics": "cross_correlation",
+        "axis_order": "CHW",
+        "input": [
+          [
+            [
+              1,
+              2,
+              3
+            ],
+            [
+              4,
+              5,
+              6
+            ],
+            [
+              7,
+              8,
+              9
+            ]
+          ]
+        ],
+        "kernel": [
+          [
+            [
+              1,
+              0
+            ],
+            [
+              0,
+              -1
+            ]
+          ]
+        ],
+        "stride": [
+          1,
+          1
+        ],
+        "padding": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "dilation": [
+          1,
+          1
+        ],
+        "bias": null
+      },
+      "parameter_schema_version": "1.0.0",
+      "value_bindings": [
+        {
+          "binding_id": "23de2480-047e-537e-95a6-3aaa8ad8e8ab",
+          "parameter_path": "input",
+          "value_origin": "demonstration",
+          "value": [
+            [
+              [
+                1,
+                2,
+                3
+              ],
+              [
+                4,
+                5,
+                6
+              ],
+              [
+                7,
+                8,
+                9
+              ]
+            ]
+          ],
+          "unit": null,
+          "source_refs": [],
+          "dependency_ids": [],
+          "formula_id": null,
+          "scope_id": "87b77af0-a570-51d2-b69c-e666d1884a1e",
+          "unknown_reason": null,
+          "user_override": false
+        }
+      ],
+      "computation": {
+        "algorithm_id": "conv2d_v1",
+        "algorithm_version": "1.0.0",
+        "operator_semantics": "cross_correlation",
+        "formula_id": "conv2d_v1",
+        "input_shape": [
+          1,
+          3,
+          3
+        ],
+        "output_shape": [
+          2,
+          2
+        ],
+        "precision_policy_id": "f64_abs_1e-9_rel_1e-9",
+        "dependency_binding_ids": []
+      },
+      "resources": [],
+      "source_refs": [
+        {
+          "entity_id": "e917d595-5885-5dc8-b208-72ac3e339a77",
+          "revision_id": "5248d652-69e2-503d-9ce0-b207137d76fd",
+          "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "selector": {
+            "kind": "text",
+            "block_id": "1e69ca55-7464-5dd1-862f-67ab94f65083",
+            "anchor": {
+              "left_element_id": null,
+              "right_element_id": null,
+              "element_ids": [
+                "7984055b-6506-5589-89af-d8080565560e"
+              ],
+              "scalar_range": {
+                "start": 0,
+                "end": 8
+              }
+            }
+          }
+        }
+      ],
+      "snapshot_id": "d638d087-b20d-507a-acdd-bf4c3f4ccc17",
+      "fact_set_revision": "ccec9cc4-e2c4-5090-bbfe-cde000bc21aa",
+      "interaction_state": {
+        "selected_input_ids": [],
+        "selected_output_ids": [],
+        "step_index": 0,
+        "camera": null,
+        "user_parameter_overrides": []
+      },
+      "presentation_by_tier": [
+        {
+          "tier": 1,
+          "label": "演示二维算子",
+          "description": "自制数据，非课堂事实",
+          "sync_status": "ready"
+        },
+        {
+          "tier": 2,
+          "label": "演示二维算子",
+          "description": "自制数据，非课堂事实",
+          "sync_status": "ready"
+        },
+        {
+          "tier": 3,
+          "label": "演示二维算子",
+          "description": "自制数据，非课堂事实",
+          "sync_status": "ready"
+        },
+        {
+          "tier": 4,
+          "label": "演示二维算子",
+          "description": "自制数据，非课堂事实",
+          "sync_status": "ready"
+        },
+        {
+          "tier": 5,
+          "label": "演示二维算子",
+          "description": "自制数据，非课堂事实",
+          "sync_status": "ready"
+        }
+      ],
+      "generation_status": "ready",
+      "validation": {
+        "checks": {
+          "schema": "pass",
+          "source": "pass",
+          "semantic": "pass",
+          "math": "pass"
+        },
+        "validator_version": "1.0.0",
+        "parameters_hash": "abe04492f8b98d50d0cac1fc5105af50c5c51d89d108c9ca5dc6c66d78217aef",
+        "validated_revision": "ff766f22-bfd2-549c-bec3-0a86997987a1",
+        "diagnostics": []
+      },
+      "fallback": {
+        "preview_resource_id": null,
+        "description": "相同参数的二维矩阵和乘加",
+        "table": [
+          [
+            "-4",
+            "-4"
+          ],
+          [
+            "-4",
+            "-4"
+          ]
+        ]
+      },
+      "code": "eval(1)"
+    },
+    "valid": false,
+    "level": "schema"
+  },
+  {
+    "name": "math-pending-not-ready",
+    "type": "VisualizationContent",
+    "value": {
+      "object_id": "ec6ff61b-4cb0-5793-8cfd-88aaf8ed9764",
+      "revision_id": "ff766f22-bfd2-549c-bec3-0a86997987a1",
+      "parent_revision_ids": [],
+      "protocol": "focaus.visualization",
+      "protocol_version": "1.0.0",
+      "template_id": "conv2d_spatial",
+      "template_version": "1.0.0",
+      "registry_revision": "1.0.0",
+      "concept_fact_ids": [
+        "5f64e716-c5bb-5464-9d4e-6d5ba3eafe65"
+      ],
+      "definition_ids": [],
+      "symbol_binding_ids": [],
+      "scope_id": "87b77af0-a570-51d2-b69c-e666d1884a1e",
+      "semantic_key": "fixture-convolution-purpose",
+      "purpose": "explain sliding window",
+      "placement_anchor": {
+        "kind": "text",
+        "block_id": "1e69ca55-7464-5dd1-862f-67ab94f65083",
+        "anchor": {
+          "left_element_id": null,
+          "right_element_id": null,
+          "element_ids": [
+            "7984055b-6506-5589-89af-d8080565560e"
+          ],
+          "scalar_range": {
+            "start": 0,
+            "end": 8
+          }
+        }
+      },
+      "parameters": {
+        "operator_dimension": 2,
+        "scene_dimension": 3,
+        "operator_semantics": "cross_correlation",
+        "axis_order": "CHW",
+        "input": [
+          [
+            [
+              1,
+              2,
+              3
+            ],
+            [
+              4,
+              5,
+              6
+            ],
+            [
+              7,
+              8,
+              9
+            ]
+          ]
+        ],
+        "kernel": [
+          [
+            [
+              1,
+              0
+            ],
+            [
+              0,
+              -1
+            ]
+          ]
+        ],
+        "stride": [
+          1,
+          1
+        ],
+        "padding": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "dilation": [
+          1,
+          1
+        ],
+        "bias": null
+      },
+      "parameter_schema_version": "1.0.0",
+      "value_bindings": [
+        {
+          "binding_id": "23de2480-047e-537e-95a6-3aaa8ad8e8ab",
+          "parameter_path": "input",
+          "value_origin": "demonstration",
+          "value": [
+            [
+              [
+                1,
+                2,
+                3
+              ],
+              [
+                4,
+                5,
+                6
+              ],
+              [
+                7,
+                8,
+                9
+              ]
+            ]
+          ],
+          "unit": null,
+          "source_refs": [],
+          "dependency_ids": [],
+          "formula_id": null,
+          "scope_id": "87b77af0-a570-51d2-b69c-e666d1884a1e",
+          "unknown_reason": null,
+          "user_override": false
+        }
+      ],
+      "computation": {
+        "algorithm_id": "conv2d_v1",
+        "algorithm_version": "1.0.0",
+        "operator_semantics": "cross_correlation",
+        "formula_id": "conv2d_v1",
+        "input_shape": [
+          1,
+          3,
+          3
+        ],
+        "output_shape": [
+          2,
+          2
+        ],
+        "precision_policy_id": "f64_abs_1e-9_rel_1e-9",
+        "dependency_binding_ids": []
+      },
+      "resources": [],
+      "source_refs": [
+        {
+          "entity_id": "e917d595-5885-5dc8-b208-72ac3e339a77",
+          "revision_id": "5248d652-69e2-503d-9ce0-b207137d76fd",
+          "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "selector": {
+            "kind": "text",
+            "block_id": "1e69ca55-7464-5dd1-862f-67ab94f65083",
+            "anchor": {
+              "left_element_id": null,
+              "right_element_id": null,
+              "element_ids": [
+                "7984055b-6506-5589-89af-d8080565560e"
+              ],
+              "scalar_range": {
+                "start": 0,
+                "end": 8
+              }
+            }
+          }
+        }
+      ],
+      "snapshot_id": "d638d087-b20d-507a-acdd-bf4c3f4ccc17",
+      "fact_set_revision": "ccec9cc4-e2c4-5090-bbfe-cde000bc21aa",
+      "interaction_state": {
+        "selected_input_ids": [],
+        "selected_output_ids": [],
+        "step_index": 0,
+        "camera": null,
+        "user_parameter_overrides": []
+      },
+      "presentation_by_tier": [
+        {
+          "tier": 1,
+          "label": "演示二维算子",
+          "description": "自制数据，非课堂事实",
+          "sync_status": "ready"
+        },
+        {
+          "tier": 2,
+          "label": "演示二维算子",
+          "description": "自制数据，非课堂事实",
+          "sync_status": "ready"
+        },
+        {
+          "tier": 3,
+          "label": "演示二维算子",
+          "description": "自制数据，非课堂事实",
+          "sync_status": "ready"
+        },
+        {
+          "tier": 4,
+          "label": "演示二维算子",
+          "description": "自制数据，非课堂事实",
+          "sync_status": "ready"
+        },
+        {
+          "tier": 5,
+          "label": "演示二维算子",
+          "description": "自制数据，非课堂事实",
+          "sync_status": "ready"
+        }
+      ],
+      "generation_status": "ready",
+      "validation": {
+        "checks": {
+          "schema": "pass",
+          "source": "pass",
+          "semantic": "pass",
+          "math": "pending"
+        },
+        "validator_version": "1.0.0",
+        "parameters_hash": "abe04492f8b98d50d0cac1fc5105af50c5c51d89d108c9ca5dc6c66d78217aef",
+        "validated_revision": "ff766f22-bfd2-549c-bec3-0a86997987a1",
+        "diagnostics": []
+      },
+      "fallback": {
+        "preview_resource_id": null,
+        "description": "相同参数的二维矩阵和乘加",
+        "table": [
+          [
+            "-4",
+            "-4"
+          ],
+          [
+            "-4",
+            "-4"
+          ]
+        ]
+      }
+    },
+    "valid": false,
+    "level": "schema"
+  },
+  {
+    "name": "wrong-parameter-hash",
+    "type": "VisualizationContent",
+    "value": {
+      "object_id": "ec6ff61b-4cb0-5793-8cfd-88aaf8ed9764",
+      "revision_id": "ff766f22-bfd2-549c-bec3-0a86997987a1",
+      "parent_revision_ids": [],
+      "protocol": "focaus.visualization",
+      "protocol_version": "1.0.0",
+      "template_id": "conv2d_spatial",
+      "template_version": "1.0.0",
+      "registry_revision": "1.0.0",
+      "concept_fact_ids": [
+        "5f64e716-c5bb-5464-9d4e-6d5ba3eafe65"
+      ],
+      "definition_ids": [],
+      "symbol_binding_ids": [],
+      "scope_id": "87b77af0-a570-51d2-b69c-e666d1884a1e",
+      "semantic_key": "fixture-convolution-purpose",
+      "purpose": "explain sliding window",
+      "placement_anchor": {
+        "kind": "text",
+        "block_id": "1e69ca55-7464-5dd1-862f-67ab94f65083",
+        "anchor": {
+          "left_element_id": null,
+          "right_element_id": null,
+          "element_ids": [
+            "7984055b-6506-5589-89af-d8080565560e"
+          ],
+          "scalar_range": {
+            "start": 0,
+            "end": 8
+          }
+        }
+      },
+      "parameters": {
+        "operator_dimension": 2,
+        "scene_dimension": 3,
+        "operator_semantics": "cross_correlation",
+        "axis_order": "CHW",
+        "input": [
+          [
+            [
+              1,
+              2,
+              3
+            ],
+            [
+              4,
+              5,
+              6
+            ],
+            [
+              7,
+              8,
+              9
+            ]
+          ]
+        ],
+        "kernel": [
+          [
+            [
+              1,
+              0
+            ],
+            [
+              0,
+              -1
+            ]
+          ]
+        ],
+        "stride": [
+          1,
+          1
+        ],
+        "padding": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "dilation": [
+          1,
+          1
+        ],
+        "bias": null
+      },
+      "parameter_schema_version": "1.0.0",
+      "value_bindings": [
+        {
+          "binding_id": "23de2480-047e-537e-95a6-3aaa8ad8e8ab",
+          "parameter_path": "input",
+          "value_origin": "demonstration",
+          "value": [
+            [
+              [
+                1,
+                2,
+                3
+              ],
+              [
+                4,
+                5,
+                6
+              ],
+              [
+                7,
+                8,
+                9
+              ]
+            ]
+          ],
+          "unit": null,
+          "source_refs": [],
+          "dependency_ids": [],
+          "formula_id": null,
+          "scope_id": "87b77af0-a570-51d2-b69c-e666d1884a1e",
+          "unknown_reason": null,
+          "user_override": false
+        }
+      ],
+      "computation": {
+        "algorithm_id": "conv2d_v1",
+        "algorithm_version": "1.0.0",
+        "operator_semantics": "cross_correlation",
+        "formula_id": "conv2d_v1",
+        "input_shape": [
+          1,
+          3,
+          3
+        ],
+        "output_shape": [
+          2,
+          2
+        ],
+        "precision_policy_id": "f64_abs_1e-9_rel_1e-9",
+        "dependency_binding_ids": []
+      },
+      "resources": [],
+      "source_refs": [
+        {
+          "entity_id": "e917d595-5885-5dc8-b208-72ac3e339a77",
+          "revision_id": "5248d652-69e2-503d-9ce0-b207137d76fd",
+          "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "selector": {
+            "kind": "text",
+            "block_id": "1e69ca55-7464-5dd1-862f-67ab94f65083",
+            "anchor": {
+              "left_element_id": null,
+              "right_element_id": null,
+              "element_ids": [
+                "7984055b-6506-5589-89af-d8080565560e"
+              ],
+              "scalar_range": {
+                "start": 0,
+                "end": 8
+              }
+            }
+          }
+        }
+      ],
+      "snapshot_id": "d638d087-b20d-507a-acdd-bf4c3f4ccc17",
+      "fact_set_revision": "ccec9cc4-e2c4-5090-bbfe-cde000bc21aa",
+      "interaction_state": {
+        "selected_input_ids": [],
+        "selected_output_ids": [],
+        "step_index": 0,
+        "camera": null,
+        "user_parameter_overrides": []
+      },
+      "presentation_by_tier": [
+        {
+          "tier": 1,
+          "label": "演示二维算子",
+          "description": "自制数据，非课堂事实",
+          "sync_status": "ready"
+        },
+        {
+          "tier": 2,
+          "label": "演示二维算子",
+          "description": "自制数据，非课堂事实",
+          "sync_status": "ready"
+        },
+        {
+          "tier": 3,
+          "label": "演示二维算子",
+          "description": "自制数据，非课堂事实",
+          "sync_status": "ready"
+        },
+        {
+          "tier": 4,
+          "label": "演示二维算子",
+          "description": "自制数据，非课堂事实",
+          "sync_status": "ready"
+        },
+        {
+          "tier": 5,
+          "label": "演示二维算子",
+          "description": "自制数据，非课堂事实",
+          "sync_status": "ready"
+        }
+      ],
+      "generation_status": "ready",
+      "validation": {
+        "checks": {
+          "schema": "pass",
+          "source": "pass",
+          "semantic": "pass",
+          "math": "pass"
+        },
+        "validator_version": "1.0.0",
+        "parameters_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+        "validated_revision": "ff766f22-bfd2-549c-bec3-0a86997987a1",
+        "diagnostics": []
+      },
+      "fallback": {
+        "preview_resource_id": null,
+        "description": "相同参数的二维矩阵和乘加",
+        "table": [
+          [
+            "-4",
+            "-4"
+          ],
+          [
+            "-4",
+            "-4"
+          ]
+        ]
+      }
+    },
+    "valid": false,
+    "level": "semantic"
+  },
+  {
+    "name": "empty-focaus-not-complete",
+    "type": "CatchupResult",
+    "value": {
+      "result_semantics": "focaus_context_v2",
+      "result_id": "d6f119e4-9fda-5a31-b129-2b8aa119f1fc",
+      "request_generation": 2,
+      "snapshot_id": "d638d087-b20d-507a-acdd-bf4c3f4ccc17",
+      "body_revision_id": "6098efc8-c017-5220-8dc0-7a17895967e9",
+      "requested_window": {
+        "recording_id": "942a0e5b-6aee-5acb-a5c5-ee843025de74",
+        "start_ms": 0,
+        "end_ms": 300000,
+        "start_source": null
+      },
+      "effective_window": {
+        "recording_id": "942a0e5b-6aee-5acb-a5c5-ee843025de74",
+        "start_ms": 0,
+        "end_ms": 300000,
+        "start_source": null
+      },
+      "estimate_basis": "unknown; five-minute default",
+      "current_focus": {
+        "topic": "合成卷积例子",
+        "problem": "如何计算当前输出格",
+        "activity": "example",
+        "step": "逐项乘加",
+        "source_refs": [
+          {
+            "entity_id": "e917d595-5885-5dc8-b208-72ac3e339a77",
+            "revision_id": "5248d652-69e2-503d-9ce0-b207137d76fd",
+            "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": {
+              "kind": "text",
+              "block_id": "1e69ca55-7464-5dd1-862f-67ab94f65083",
+              "anchor": {
+                "left_element_id": null,
+                "right_element_id": null,
+                "element_ids": [
+                  "7984055b-6506-5589-89af-d8080565560e"
+                ],
+                "scalar_range": {
+                  "start": 0,
+                  "end": 8
+                }
+              }
+            }
+          }
+        ],
+        "status": "supported"
+      },
+      "path_nodes": [
+        {
+          "node_id": "current",
+          "role": "current",
+          "fact_ids": [
+            "5f64e716-c5bb-5464-9d4e-6d5ba3eafe65"
+          ],
+          "definition_ids": [],
+          "binding_ids": [],
+          "body_block_ids": [
+            "237f2764-2bd0-5203-b9f6-e8a4d4f958d6"
+          ],
+          "evidence_role": "teacher_path",
+          "source_refs": [
+            {
+              "entity_id": "e917d595-5885-5dc8-b208-72ac3e339a77",
+              "revision_id": "5248d652-69e2-503d-9ce0-b207137d76fd",
+              "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "selector": {
+                "kind": "text",
+                "block_id": "1e69ca55-7464-5dd1-862f-67ab94f65083",
+                "anchor": {
+                  "left_element_id": null,
+                  "right_element_id": null,
+                  "element_ids": [
+                    "7984055b-6506-5589-89af-d8080565560e"
+                  ],
+                  "scalar_range": {
+                    "start": 0,
+                    "end": 8
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "node_id": "bridge",
+          "role": "bridge",
+          "fact_ids": [],
+          "definition_ids": [],
+          "binding_ids": [],
+          "body_block_ids": [
+            "237f2764-2bd0-5203-b9f6-e8a4d4f958d6"
+          ],
+          "evidence_role": "system_explanation",
+          "source_refs": [
+            {
+              "entity_id": "e917d595-5885-5dc8-b208-72ac3e339a77",
+              "revision_id": "5248d652-69e2-503d-9ce0-b207137d76fd",
+              "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "selector": {
+                "kind": "text",
+                "block_id": "1e69ca55-7464-5dd1-862f-67ab94f65083",
+                "anchor": {
+                  "left_element_id": null,
+                  "right_element_id": null,
+                  "element_ids": [
+                    "7984055b-6506-5589-89af-d8080565560e"
+                  ],
+                  "scalar_range": {
+                    "start": 0,
+                    "end": 8
+                  }
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "path_edges": [
+        {
+          "from_node_id": "bridge",
+          "to_node_id": "current",
+          "relation": "dependency",
+          "source_refs": [
+            {
+              "entity_id": "e917d595-5885-5dc8-b208-72ac3e339a77",
+              "revision_id": "5248d652-69e2-503d-9ce0-b207137d76fd",
+              "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "selector": {
+                "kind": "text",
+                "block_id": "1e69ca55-7464-5dd1-862f-67ab94f65083",
+                "anchor": {
+                  "left_element_id": null,
+                  "right_element_id": null,
+                  "element_ids": [
+                    "7984055b-6506-5589-89af-d8080565560e"
+                  ],
+                  "scalar_range": {
+                    "start": 0,
+                    "end": 8
+                  }
+                }
+              }
+            }
+          ],
+          "certainty": "supported"
+        }
+      ],
+      "prerequisites": [
+        {
+          "definition_id": "3d2b5366-dea2-51bc-b5db-58ab9553d7fc",
+          "binding_id": null,
+          "fact_id": null,
+          "reason": "理解求和需要先前定义",
+          "source_refs": [
+            {
+              "entity_id": "e917d595-5885-5dc8-b208-72ac3e339a77",
+              "revision_id": "5248d652-69e2-503d-9ce0-b207137d76fd",
+              "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "selector": {
+                "kind": "text",
+                "block_id": "1e69ca55-7464-5dd1-862f-67ab94f65083",
+                "anchor": {
+                  "left_element_id": null,
+                  "right_element_id": null,
+                  "element_ids": [
+                    "7984055b-6506-5589-89af-d8080565560e"
+                  ],
+                  "scalar_range": {
+                    "start": 0,
+                    "end": 8
+                  }
+                }
+              }
+            }
+          ],
+          "scope_id": "87b77af0-a570-51d2-b69c-e666d1884a1e",
+          "outside_window": true
+        }
+      ],
+      "prerequisites_reason": null,
+      "body": [],
+      "presentation_tier": 3,
+      "body_evidence_cutoff": [
+        {
+          "recording_id": "942a0e5b-6aee-5acb-a5c5-ee843025de74",
+          "end_ms": 300000,
+          "status": "known"
+        }
+      ],
+      "body_generated_at": "2026-10-18T02:00:00Z",
+      "progress_at_trigger": null,
+      "progress_unavailable_reason": "fixture no progress",
+      "progress_binding": {
+        "lesson_id": "663edcac-088a-5a53-a7d9-7219ca5d9d55",
+        "recording_id": "942a0e5b-6aee-5acb-a5c5-ee843025de74",
+        "assignment_epoch": 0,
+        "no_pointer_reason": null
+      },
+      "coverage": {
+        "audio_gaps": [],
+        "asr_gaps": [],
+        "material_supplement_used": false,
+        "range_status": "complete"
+      },
+      "limitations": [],
+      "completion_status": "complete",
+      "triggered_at": "2026-10-18T02:00:00Z",
+      "completed_at": "2026-10-18T02:00:00Z",
+      "displayed_complete_elapsed_ms": 14000
+    },
+    "valid": false,
+    "level": "schema"
+  },
+  {
+    "name": "unknown-focus-not-complete",
+    "type": "CatchupResult",
+    "value": {
+      "result_semantics": "focaus_context_v2",
+      "result_id": "d6f119e4-9fda-5a31-b129-2b8aa119f1fc",
+      "request_generation": 2,
+      "snapshot_id": "d638d087-b20d-507a-acdd-bf4c3f4ccc17",
+      "body_revision_id": "6098efc8-c017-5220-8dc0-7a17895967e9",
+      "requested_window": {
+        "recording_id": "942a0e5b-6aee-5acb-a5c5-ee843025de74",
+        "start_ms": 0,
+        "end_ms": 300000,
+        "start_source": null
+      },
+      "effective_window": {
+        "recording_id": "942a0e5b-6aee-5acb-a5c5-ee843025de74",
+        "start_ms": 0,
+        "end_ms": 300000,
+        "start_source": null
+      },
+      "estimate_basis": "unknown; five-minute default",
+      "current_focus": {
+        "topic": "合成卷积例子",
+        "problem": "如何计算当前输出格",
+        "activity": "example",
+        "step": "逐项乘加",
+        "source_refs": [
+          {
+            "entity_id": "e917d595-5885-5dc8-b208-72ac3e339a77",
+            "revision_id": "5248d652-69e2-503d-9ce0-b207137d76fd",
+            "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": {
+              "kind": "text",
+              "block_id": "1e69ca55-7464-5dd1-862f-67ab94f65083",
+              "anchor": {
+                "left_element_id": null,
+                "right_element_id": null,
+                "element_ids": [
+                  "7984055b-6506-5589-89af-d8080565560e"
+                ],
+                "scalar_range": {
+                  "start": 0,
+                  "end": 8
+                }
+              }
+            }
+          }
+        ],
+        "status": "unknown"
+      },
+      "path_nodes": [
+        {
+          "node_id": "current",
+          "role": "current",
+          "fact_ids": [
+            "5f64e716-c5bb-5464-9d4e-6d5ba3eafe65"
+          ],
+          "definition_ids": [],
+          "binding_ids": [],
+          "body_block_ids": [
+            "237f2764-2bd0-5203-b9f6-e8a4d4f958d6"
+          ],
+          "evidence_role": "teacher_path",
+          "source_refs": [
+            {
+              "entity_id": "e917d595-5885-5dc8-b208-72ac3e339a77",
+              "revision_id": "5248d652-69e2-503d-9ce0-b207137d76fd",
+              "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "selector": {
+                "kind": "text",
+                "block_id": "1e69ca55-7464-5dd1-862f-67ab94f65083",
+                "anchor": {
+                  "left_element_id": null,
+                  "right_element_id": null,
+                  "element_ids": [
+                    "7984055b-6506-5589-89af-d8080565560e"
+                  ],
+                  "scalar_range": {
+                    "start": 0,
+                    "end": 8
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "node_id": "bridge",
+          "role": "bridge",
+          "fact_ids": [],
+          "definition_ids": [],
+          "binding_ids": [],
+          "body_block_ids": [
+            "237f2764-2bd0-5203-b9f6-e8a4d4f958d6"
+          ],
+          "evidence_role": "system_explanation",
+          "source_refs": [
+            {
+              "entity_id": "e917d595-5885-5dc8-b208-72ac3e339a77",
+              "revision_id": "5248d652-69e2-503d-9ce0-b207137d76fd",
+              "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "selector": {
+                "kind": "text",
+                "block_id": "1e69ca55-7464-5dd1-862f-67ab94f65083",
+                "anchor": {
+                  "left_element_id": null,
+                  "right_element_id": null,
+                  "element_ids": [
+                    "7984055b-6506-5589-89af-d8080565560e"
+                  ],
+                  "scalar_range": {
+                    "start": 0,
+                    "end": 8
+                  }
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "path_edges": [
+        {
+          "from_node_id": "bridge",
+          "to_node_id": "current",
+          "relation": "dependency",
+          "source_refs": [
+            {
+              "entity_id": "e917d595-5885-5dc8-b208-72ac3e339a77",
+              "revision_id": "5248d652-69e2-503d-9ce0-b207137d76fd",
+              "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "selector": {
+                "kind": "text",
+                "block_id": "1e69ca55-7464-5dd1-862f-67ab94f65083",
+                "anchor": {
+                  "left_element_id": null,
+                  "right_element_id": null,
+                  "element_ids": [
+                    "7984055b-6506-5589-89af-d8080565560e"
+                  ],
+                  "scalar_range": {
+                    "start": 0,
+                    "end": 8
+                  }
+                }
+              }
+            }
+          ],
+          "certainty": "supported"
+        }
+      ],
+      "prerequisites": [
+        {
+          "definition_id": "3d2b5366-dea2-51bc-b5db-58ab9553d7fc",
+          "binding_id": null,
+          "fact_id": null,
+          "reason": "理解求和需要先前定义",
+          "source_refs": [
+            {
+              "entity_id": "e917d595-5885-5dc8-b208-72ac3e339a77",
+              "revision_id": "5248d652-69e2-503d-9ce0-b207137d76fd",
+              "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "selector": {
+                "kind": "text",
+                "block_id": "1e69ca55-7464-5dd1-862f-67ab94f65083",
+                "anchor": {
+                  "left_element_id": null,
+                  "right_element_id": null,
+                  "element_ids": [
+                    "7984055b-6506-5589-89af-d8080565560e"
+                  ],
+                  "scalar_range": {
+                    "start": 0,
+                    "end": 8
+                  }
+                }
+              }
+            }
+          ],
+          "scope_id": "87b77af0-a570-51d2-b69c-e666d1884a1e",
+          "outside_window": true
+        }
+      ],
+      "prerequisites_reason": null,
+      "body": [
+        {
+          "block_id": "237f2764-2bd0-5203-b9f6-e8a4d4f958d6",
+          "text": "合成示例：从当前滑窗的各项乘积相加，接回当前输出格。"
+        }
+      ],
+      "presentation_tier": 3,
+      "body_evidence_cutoff": [
+        {
+          "recording_id": "942a0e5b-6aee-5acb-a5c5-ee843025de74",
+          "end_ms": 300000,
+          "status": "known"
+        }
+      ],
+      "body_generated_at": "2026-10-18T02:00:00Z",
+      "progress_at_trigger": null,
+      "progress_unavailable_reason": "fixture no progress",
+      "progress_binding": {
+        "lesson_id": "663edcac-088a-5a53-a7d9-7219ca5d9d55",
+        "recording_id": "942a0e5b-6aee-5acb-a5c5-ee843025de74",
+        "assignment_epoch": 0,
+        "no_pointer_reason": null
+      },
+      "coverage": {
+        "audio_gaps": [],
+        "asr_gaps": [],
+        "material_supplement_used": false,
+        "range_status": "complete"
+      },
+      "limitations": [],
+      "completion_status": "complete",
+      "triggered_at": "2026-10-18T02:00:00Z",
+      "completed_at": "2026-10-18T02:00:00Z",
+      "displayed_complete_elapsed_ms": 14000
+    },
+    "valid": false,
+    "level": "schema"
+  },
+  {
+    "name": "invented-teacher-path",
+    "type": "CatchupResult",
+    "value": {
+      "result_semantics": "focaus_context_v2",
+      "result_id": "d6f119e4-9fda-5a31-b129-2b8aa119f1fc",
+      "request_generation": 2,
+      "snapshot_id": "d638d087-b20d-507a-acdd-bf4c3f4ccc17",
+      "body_revision_id": "6098efc8-c017-5220-8dc0-7a17895967e9",
+      "requested_window": {
+        "recording_id": "942a0e5b-6aee-5acb-a5c5-ee843025de74",
+        "start_ms": 0,
+        "end_ms": 300000,
+        "start_source": null
+      },
+      "effective_window": {
+        "recording_id": "942a0e5b-6aee-5acb-a5c5-ee843025de74",
+        "start_ms": 0,
+        "end_ms": 300000,
+        "start_source": null
+      },
+      "estimate_basis": "unknown; five-minute default",
+      "current_focus": {
+        "topic": "合成卷积例子",
+        "problem": "如何计算当前输出格",
+        "activity": "example",
+        "step": "逐项乘加",
+        "source_refs": [
+          {
+            "entity_id": "e917d595-5885-5dc8-b208-72ac3e339a77",
+            "revision_id": "5248d652-69e2-503d-9ce0-b207137d76fd",
+            "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": {
+              "kind": "text",
+              "block_id": "1e69ca55-7464-5dd1-862f-67ab94f65083",
+              "anchor": {
+                "left_element_id": null,
+                "right_element_id": null,
+                "element_ids": [
+                  "7984055b-6506-5589-89af-d8080565560e"
+                ],
+                "scalar_range": {
+                  "start": 0,
+                  "end": 8
+                }
+              }
+            }
+          }
+        ],
+        "status": "supported"
+      },
+      "path_nodes": [
+        {
+          "node_id": "current",
+          "role": "current",
+          "fact_ids": [
+            "5f64e716-c5bb-5464-9d4e-6d5ba3eafe65"
+          ],
+          "definition_ids": [],
+          "binding_ids": [],
+          "body_block_ids": [
+            "237f2764-2bd0-5203-b9f6-e8a4d4f958d6"
+          ],
+          "evidence_role": "teacher_path",
+          "source_refs": []
+        },
+        {
+          "node_id": "bridge",
+          "role": "bridge",
+          "fact_ids": [],
+          "definition_ids": [],
+          "binding_ids": [],
+          "body_block_ids": [
+            "237f2764-2bd0-5203-b9f6-e8a4d4f958d6"
+          ],
+          "evidence_role": "system_explanation",
+          "source_refs": [
+            {
+              "entity_id": "e917d595-5885-5dc8-b208-72ac3e339a77",
+              "revision_id": "5248d652-69e2-503d-9ce0-b207137d76fd",
+              "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "selector": {
+                "kind": "text",
+                "block_id": "1e69ca55-7464-5dd1-862f-67ab94f65083",
+                "anchor": {
+                  "left_element_id": null,
+                  "right_element_id": null,
+                  "element_ids": [
+                    "7984055b-6506-5589-89af-d8080565560e"
+                  ],
+                  "scalar_range": {
+                    "start": 0,
+                    "end": 8
+                  }
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "path_edges": [
+        {
+          "from_node_id": "bridge",
+          "to_node_id": "current",
+          "relation": "dependency",
+          "source_refs": [
+            {
+              "entity_id": "e917d595-5885-5dc8-b208-72ac3e339a77",
+              "revision_id": "5248d652-69e2-503d-9ce0-b207137d76fd",
+              "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "selector": {
+                "kind": "text",
+                "block_id": "1e69ca55-7464-5dd1-862f-67ab94f65083",
+                "anchor": {
+                  "left_element_id": null,
+                  "right_element_id": null,
+                  "element_ids": [
+                    "7984055b-6506-5589-89af-d8080565560e"
+                  ],
+                  "scalar_range": {
+                    "start": 0,
+                    "end": 8
+                  }
+                }
+              }
+            }
+          ],
+          "certainty": "supported"
+        }
+      ],
+      "prerequisites": [
+        {
+          "definition_id": "3d2b5366-dea2-51bc-b5db-58ab9553d7fc",
+          "binding_id": null,
+          "fact_id": null,
+          "reason": "理解求和需要先前定义",
+          "source_refs": [
+            {
+              "entity_id": "e917d595-5885-5dc8-b208-72ac3e339a77",
+              "revision_id": "5248d652-69e2-503d-9ce0-b207137d76fd",
+              "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "selector": {
+                "kind": "text",
+                "block_id": "1e69ca55-7464-5dd1-862f-67ab94f65083",
+                "anchor": {
+                  "left_element_id": null,
+                  "right_element_id": null,
+                  "element_ids": [
+                    "7984055b-6506-5589-89af-d8080565560e"
+                  ],
+                  "scalar_range": {
+                    "start": 0,
+                    "end": 8
+                  }
+                }
+              }
+            }
+          ],
+          "scope_id": "87b77af0-a570-51d2-b69c-e666d1884a1e",
+          "outside_window": true
+        }
+      ],
+      "prerequisites_reason": null,
+      "body": [
+        {
+          "block_id": "237f2764-2bd0-5203-b9f6-e8a4d4f958d6",
+          "text": "合成示例：从当前滑窗的各项乘积相加，接回当前输出格。"
+        }
+      ],
+      "presentation_tier": 3,
+      "body_evidence_cutoff": [
+        {
+          "recording_id": "942a0e5b-6aee-5acb-a5c5-ee843025de74",
+          "end_ms": 300000,
+          "status": "known"
+        }
+      ],
+      "body_generated_at": "2026-10-18T02:00:00Z",
+      "progress_at_trigger": null,
+      "progress_unavailable_reason": "fixture no progress",
+      "progress_binding": {
+        "lesson_id": "663edcac-088a-5a53-a7d9-7219ca5d9d55",
+        "recording_id": "942a0e5b-6aee-5acb-a5c5-ee843025de74",
+        "assignment_epoch": 0,
+        "no_pointer_reason": null
+      },
+      "coverage": {
+        "audio_gaps": [],
+        "asr_gaps": [],
+        "material_supplement_used": false,
+        "range_status": "complete"
+      },
+      "limitations": [],
+      "completion_status": "complete",
+      "triggered_at": "2026-10-18T02:00:00Z",
+      "completed_at": "2026-10-18T02:00:00Z",
+      "displayed_complete_elapsed_ms": 14000
+    },
+    "valid": false,
+    "level": "semantic"
+  },
+  {
+    "name": "broken-understanding-path",
+    "type": "CatchupResult",
+    "value": {
+      "result_semantics": "focaus_context_v2",
+      "result_id": "d6f119e4-9fda-5a31-b129-2b8aa119f1fc",
+      "request_generation": 2,
+      "snapshot_id": "d638d087-b20d-507a-acdd-bf4c3f4ccc17",
+      "body_revision_id": "6098efc8-c017-5220-8dc0-7a17895967e9",
+      "requested_window": {
+        "recording_id": "942a0e5b-6aee-5acb-a5c5-ee843025de74",
+        "start_ms": 0,
+        "end_ms": 300000,
+        "start_source": null
+      },
+      "effective_window": {
+        "recording_id": "942a0e5b-6aee-5acb-a5c5-ee843025de74",
+        "start_ms": 0,
+        "end_ms": 300000,
+        "start_source": null
+      },
+      "estimate_basis": "unknown; five-minute default",
+      "current_focus": {
+        "topic": "合成卷积例子",
+        "problem": "如何计算当前输出格",
+        "activity": "example",
+        "step": "逐项乘加",
+        "source_refs": [
+          {
+            "entity_id": "e917d595-5885-5dc8-b208-72ac3e339a77",
+            "revision_id": "5248d652-69e2-503d-9ce0-b207137d76fd",
+            "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "selector": {
+              "kind": "text",
+              "block_id": "1e69ca55-7464-5dd1-862f-67ab94f65083",
+              "anchor": {
+                "left_element_id": null,
+                "right_element_id": null,
+                "element_ids": [
+                  "7984055b-6506-5589-89af-d8080565560e"
+                ],
+                "scalar_range": {
+                  "start": 0,
+                  "end": 8
+                }
+              }
+            }
+          }
+        ],
+        "status": "supported"
+      },
+      "path_nodes": [
+        {
+          "node_id": "current",
+          "role": "current",
+          "fact_ids": [
+            "5f64e716-c5bb-5464-9d4e-6d5ba3eafe65"
+          ],
+          "definition_ids": [],
+          "binding_ids": [],
+          "body_block_ids": [
+            "237f2764-2bd0-5203-b9f6-e8a4d4f958d6"
+          ],
+          "evidence_role": "teacher_path",
+          "source_refs": [
+            {
+              "entity_id": "e917d595-5885-5dc8-b208-72ac3e339a77",
+              "revision_id": "5248d652-69e2-503d-9ce0-b207137d76fd",
+              "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "selector": {
+                "kind": "text",
+                "block_id": "1e69ca55-7464-5dd1-862f-67ab94f65083",
+                "anchor": {
+                  "left_element_id": null,
+                  "right_element_id": null,
+                  "element_ids": [
+                    "7984055b-6506-5589-89af-d8080565560e"
+                  ],
+                  "scalar_range": {
+                    "start": 0,
+                    "end": 8
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "node_id": "bridge",
+          "role": "bridge",
+          "fact_ids": [],
+          "definition_ids": [],
+          "binding_ids": [],
+          "body_block_ids": [
+            "237f2764-2bd0-5203-b9f6-e8a4d4f958d6"
+          ],
+          "evidence_role": "system_explanation",
+          "source_refs": [
+            {
+              "entity_id": "e917d595-5885-5dc8-b208-72ac3e339a77",
+              "revision_id": "5248d652-69e2-503d-9ce0-b207137d76fd",
+              "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "selector": {
+                "kind": "text",
+                "block_id": "1e69ca55-7464-5dd1-862f-67ab94f65083",
+                "anchor": {
+                  "left_element_id": null,
+                  "right_element_id": null,
+                  "element_ids": [
+                    "7984055b-6506-5589-89af-d8080565560e"
+                  ],
+                  "scalar_range": {
+                    "start": 0,
+                    "end": 8
+                  }
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "path_edges": [
+        {
+          "from_node_id": "bridge",
+          "to_node_id": "absent",
+          "relation": "dependency",
+          "source_refs": [
+            {
+              "entity_id": "e917d595-5885-5dc8-b208-72ac3e339a77",
+              "revision_id": "5248d652-69e2-503d-9ce0-b207137d76fd",
+              "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "selector": {
+                "kind": "text",
+                "block_id": "1e69ca55-7464-5dd1-862f-67ab94f65083",
+                "anchor": {
+                  "left_element_id": null,
+                  "right_element_id": null,
+                  "element_ids": [
+                    "7984055b-6506-5589-89af-d8080565560e"
+                  ],
+                  "scalar_range": {
+                    "start": 0,
+                    "end": 8
+                  }
+                }
+              }
+            }
+          ],
+          "certainty": "supported"
+        }
+      ],
+      "prerequisites": [
+        {
+          "definition_id": "3d2b5366-dea2-51bc-b5db-58ab9553d7fc",
+          "binding_id": null,
+          "fact_id": null,
+          "reason": "理解求和需要先前定义",
+          "source_refs": [
+            {
+              "entity_id": "e917d595-5885-5dc8-b208-72ac3e339a77",
+              "revision_id": "5248d652-69e2-503d-9ce0-b207137d76fd",
+              "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "selector": {
+                "kind": "text",
+                "block_id": "1e69ca55-7464-5dd1-862f-67ab94f65083",
+                "anchor": {
+                  "left_element_id": null,
+                  "right_element_id": null,
+                  "element_ids": [
+                    "7984055b-6506-5589-89af-d8080565560e"
+                  ],
+                  "scalar_range": {
+                    "start": 0,
+                    "end": 8
+                  }
+                }
+              }
+            }
+          ],
+          "scope_id": "87b77af0-a570-51d2-b69c-e666d1884a1e",
+          "outside_window": true
+        }
+      ],
+      "prerequisites_reason": null,
+      "body": [
+        {
+          "block_id": "237f2764-2bd0-5203-b9f6-e8a4d4f958d6",
+          "text": "合成示例：从当前滑窗的各项乘积相加，接回当前输出格。"
+        }
+      ],
+      "presentation_tier": 3,
+      "body_evidence_cutoff": [
+        {
+          "recording_id": "942a0e5b-6aee-5acb-a5c5-ee843025de74",
+          "end_ms": 300000,
+          "status": "known"
+        }
+      ],
+      "body_generated_at": "2026-10-18T02:00:00Z",
+      "progress_at_trigger": null,
+      "progress_unavailable_reason": "fixture no progress",
+      "progress_binding": {
+        "lesson_id": "663edcac-088a-5a53-a7d9-7219ca5d9d55",
+        "recording_id": "942a0e5b-6aee-5acb-a5c5-ee843025de74",
+        "assignment_epoch": 0,
+        "no_pointer_reason": null
+      },
+      "coverage": {
+        "audio_gaps": [],
+        "asr_gaps": [],
+        "material_supplement_used": false,
+        "range_status": "complete"
+      },
+      "limitations": [],
+      "completion_status": "complete",
+      "triggered_at": "2026-10-18T02:00:00Z",
+      "completed_at": "2026-10-18T02:00:00Z",
+      "displayed_complete_elapsed_ms": 14000
+    },
+    "valid": false,
+    "level": "semantic"
+  },
+  {
+    "name": "partial-search-is-not-zero-exact",
+    "type": "SearchPage",
+    "value": {
+      "search_id": "60d6250f-e8b3-5f18-bb3e-3272c3a034cf",
+      "query_seq": 3,
+      "scope_snapshot_id": "541f3e30-6e79-52b8-80de-39313419578c",
+      "hits": [],
+      "total_count": 0,
+      "count_status": "exact",
+      "coverage": {
+        "scope_snapshot_id": "541f3e30-6e79-52b8-80de-39313419578c",
+        "required_units": 1,
+        "indexed_units": 0,
+        "required_pages": [
+          "6073134a-8d98-5e96-999c-35dba3c74471"
+        ],
+        "indexed_pages": [],
+        "unprocessed": [
+          {
+            "page_id": "6073134a-8d98-5e96-999c-35dba3c74471",
+            "region_id": null,
+            "reason": "not_ocr"
+          }
+        ],
+        "failed": [],
+        "stale": [],
+        "state": "partial",
+        "source_extraction_revision": "2cd9022f-5474-557e-814f-5b34dbb2fb8e"
+      },
+      "index_generation": 1,
+      "visibility_epoch": 0,
+      "next_cursor": null
+    },
+    "valid": false,
+    "level": "semantic"
+  },
+  {
+    "name": "binding-bailian_beijing_asr_streaming",
+    "type": "CredentialBinding",
+    "value": {
+      "provider": "bailian",
+      "region": "cn-beijing",
+      "model_id": "qwen-audio-3.1-asr-flash-streaming",
+      "credential_ref": "bailian_beijing_asr_streaming"
+    },
+    "valid": true,
+    "level": "schema"
+  },
+  {
+    "name": "reject-cross-slot-bailian_beijing_asr_streaming",
+    "type": "CredentialBinding",
+    "value": {
+      "provider": "bailian",
+      "region": "cn-beijing",
+      "model_id": "qwen-audio-3.1-asr-flash-streaming",
+      "credential_ref": "bailian_beijing_progress"
+    },
+    "valid": false,
+    "level": "schema"
+  },
+  {
+    "name": "binding-bailian_beijing_progress",
+    "type": "CredentialBinding",
+    "value": {
+      "provider": "bailian",
+      "region": "cn-beijing",
+      "model_id": "decision-model-preview",
+      "credential_ref": "bailian_beijing_progress"
+    },
+    "valid": true,
+    "level": "schema"
+  },
+  {
+    "name": "reject-cross-slot-bailian_beijing_progress",
+    "type": "CredentialBinding",
+    "value": {
+      "provider": "bailian",
+      "region": "cn-beijing",
+      "model_id": "decision-model-preview",
+      "credential_ref": "bailian_beijing_multimodal"
+    },
+    "valid": false,
+    "level": "schema"
+  },
+  {
+    "name": "binding-bailian_beijing_multimodal",
+    "type": "CredentialBinding",
+    "value": {
+      "provider": "bailian",
+      "region": "cn-beijing",
+      "model_id": "qwen3.8-flash",
+      "credential_ref": "bailian_beijing_multimodal"
+    },
+    "valid": true,
+    "level": "schema"
+  },
+  {
+    "name": "reject-cross-slot-bailian_beijing_multimodal",
+    "type": "CredentialBinding",
+    "value": {
+      "provider": "bailian",
+      "region": "cn-beijing",
+      "model_id": "qwen3.8-flash",
+      "credential_ref": "bailian_beijing_progress"
+    },
+    "valid": false,
+    "level": "schema"
+  },
+  {
+    "name": "binding-bailian_beijing_asr_filetrans",
+    "type": "CredentialBinding",
+    "value": {
+      "provider": "bailian",
+      "region": "cn-beijing",
+      "model_id": "qwen-audio-3.1-asr-flash-filetrans",
+      "credential_ref": "bailian_beijing_asr_filetrans"
+    },
+    "valid": true,
+    "level": "schema"
+  },
+  {
+    "name": "reject-cross-slot-bailian_beijing_asr_filetrans",
+    "type": "CredentialBinding",
+    "value": {
+      "provider": "bailian",
+      "region": "cn-beijing",
+      "model_id": "qwen-audio-3.1-asr-flash-filetrans",
+      "credential_ref": "bailian_beijing_progress"
+    },
+    "valid": false,
+    "level": "schema"
+  },
+  {
+    "name": "start-command",
+    "type": "Command",
+    "value": {
+      "contract_version": "2.0.0",
+      "command_id": "1ef132d0-3bba-5911-8022-361a8353d64d",
+      "name": "recording.start",
+      "actor": "user",
+      "window_id": "8194d4a9-7f7c-559a-b1a8-305b35f58e91",
+      "payload": {
+        "lesson_id": null,
+        "device_id": null
+      },
+      "idempotency_key": "fixture-start",
+      "expected_revisions": {}
+    },
+    "valid": true,
+    "level": "schema"
+  },
+  {
+    "name": "mutation-needs-idempotency",
+    "type": "Command",
+    "value": {
+      "contract_version": "2.0.0",
+      "command_id": "1ef132d0-3bba-5911-8022-361a8353d64d",
+      "name": "recording.start",
+      "actor": "user",
+      "window_id": "8194d4a9-7f7c-559a-b1a8-305b35f58e91",
+      "payload": {
+        "lesson_id": null,
+        "device_id": null
+      },
+      "expected_revisions": {}
+    },
+    "valid": false,
+    "level": "schema"
+  },
+  {
+    "name": "payload-rejects-unknown-field",
+    "type": "Command",
+    "value": {
+      "contract_version": "2.0.0",
+      "command_id": "1ef132d0-3bba-5911-8022-361a8353d64d",
+      "name": "recording.start",
+      "actor": "user",
+      "window_id": "8194d4a9-7f7c-559a-b1a8-305b35f58e91",
+      "payload": {
+        "lesson_id": null,
+        "device_id": null,
+        "api_key": "not-a-key"
+      },
+      "idempotency_key": "fixture-start",
+      "expected_revisions": {}
+    },
+    "valid": false,
+    "level": "schema"
+  },
+  {
+    "name": "six-cells",
+    "type": "Layout",
+    "value": {
+      "columns": [
+        [
+          "225819f9-1bd3-504c-9739-e147c0431860",
+          "8e5b6883-7f9d-50c5-a6e6-71dcdf97df83"
+        ],
+        [
+          "dc4c3809-ce42-5226-8614-3b95b1eab4b8",
+          "b1224c8a-9484-5589-9206-0286cfe770c1"
+        ],
+        [
+          "8dccec1e-b0af-59d1-9d73-41d23df894dd",
+          "ed9a33b1-dba9-56b0-ba92-9b35dfde8e83"
+        ]
+      ],
+      "column_ratios": [
+        1,
+        1,
+        1
+      ],
+      "row_ratios": [
+        [
+          1,
+          1
+        ],
+        [
+          1,
+          1
+        ],
+        [
+          1,
+          1
+        ]
+      ],
+      "maximized_view_id": null,
+      "revision_id": "3a160400-528a-5f56-8cb4-3bf4928dac48"
+    },
+    "valid": true,
+    "level": "schema"
+  },
+  {
+    "name": "seventh-grid-cell",
+    "type": "Layout",
+    "value": {
+      "columns": [
+        [
+          "225819f9-1bd3-504c-9739-e147c0431860",
+          "8e5b6883-7f9d-50c5-a6e6-71dcdf97df83"
+        ],
+        [
+          "dc4c3809-ce42-5226-8614-3b95b1eab4b8",
+          "b1224c8a-9484-5589-9206-0286cfe770c1"
+        ],
+        [
+          "8dccec1e-b0af-59d1-9d73-41d23df894dd",
+          "ed9a33b1-dba9-56b0-ba92-9b35dfde8e83"
+        ],
+        [
+          "d16c234a-02d7-5332-b117-65b00ee1b4d9"
+        ]
+      ],
+      "column_ratios": [
+        1,
+        1,
+        1
+      ],
+      "row_ratios": [
+        [
+          1,
+          1
+        ],
+        [
+          1,
+          1
+        ],
+        [
+          1,
+          1
+        ]
+      ],
+      "maximized_view_id": null,
+      "revision_id": "3a160400-528a-5f56-8cb4-3bf4928dac48"
+    },
+    "valid": false,
+    "level": "schema"
+  }
+]

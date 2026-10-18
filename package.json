@@ -1,0 +1,19 @@
+{
+  "name": "focaus",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@11.25.0",
+  "scripts": {
+    "contracts:check": "python3 schemas/generate.py --check",
+    "typecheck": "tsc --noEmit",
+    "test:contracts": "node --experimental-strip-types tests/integration/contracts.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0",
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1",
+    "canonicalize": "^2.1.0"
+  },
+  "type": "module"
+}

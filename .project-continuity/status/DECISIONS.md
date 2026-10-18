@@ -173,3 +173,5 @@
 
 - D167（2026-10-18，当前开发授权）：用户明确启动macOS开发验证版，替代D160/D165仅工程文档阶段；总控依G0/G1后创建四个真正持久可见开发对话，固定gpt-6.1-sol/max，禁止subagent/fork替代。授权总控与这四路分配/更新本项目任务及向总控报告澄清，可信反向授权不足时由总控拉取。公共契约/迁移/注册表/根配置/权威continuity仅总控写。实际云调用、上传和费用仍须先核对明确授权；不读取输出密钥。原产品及七工程文档保留为只读依据，旧阶段状态由本条替代。
 - D168（2026-10-18，用户跟进）：允许创建Git；包括总控在内的五个开发会话遇到问题可随时向用户提问。初始化及已请求的本地分支/worktree开发可以推进，本地merge/cherry-pick整合与契约同步已提出一次性确认，尚未收到答复；不自动push、发布、rebase或删除分支/worktree。
+
+- D169（2026-10-18，总控可逆工程决定）：G1以schemas/source.py为唯一公共契约源，生成JSON Schema/TypeScript/Rust；content hash采用RFC8785，数据库首迁移schema1，搜索profile固定Unicode15.0.0。旧1.x资料经显式Python适配保原包/ID/源版本、新parse revision和未处理覆盖；旧catchup为legacy_summary。根基础React19/HeroUI3/Tailwind4仅C锁依赖，具体可视化库仍待U12。契约验证通过不代表产品实测。

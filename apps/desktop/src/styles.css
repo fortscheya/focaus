@@ -1,0 +1,3 @@
+/* HeroUI React v3 official default theme. Copy into the project's main CSS. */
+@import "tailwindcss";
+@import "@heroui/styles";

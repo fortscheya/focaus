@@ -1,0 +1,50 @@
+{
+  "registry_revision": "1.0.0",
+  "protocol": "focaus.visualization",
+  "protocol_version": "1.0.0",
+  "templates": {
+    "function_curve_2d": {
+      "version": "1.0.0",
+      "parameter_type": "CurveParameters",
+      "algorithm_id": "affine_v1",
+      "max_samples": 4096
+    },
+    "conv2d_spatial": {
+      "version": "1.0.0",
+      "parameter_type": "Conv2dParameters",
+      "algorithm_id": "conv2d_v1",
+      "max_scalar_operations": 1000000,
+      "max_elements": 65536,
+      "supported_dilation": [
+        1,
+        1
+      ],
+      "padding_order": [
+        "top",
+        "bottom",
+        "left",
+        "right"
+      ],
+      "kernel_channels": "must_match_input",
+      "output_channels": 1
+    }
+  },
+  "precision": {
+    "id": "f64_abs_1e-9_rel_1e-9",
+    "absolute": 1e-09,
+    "relative": 1e-09
+  },
+  "semantic_key_fields": [
+    "concept_fact_ids",
+    "definition_ids",
+    "symbol_binding_ids",
+    "scope_id",
+    "purpose",
+    "template_family"
+  ],
+  "search_profile": {
+    "id": "nfc_casefold_ws_v1",
+    "unicode_version": "15.0.0",
+    "projection_version": 1
+  }
+}

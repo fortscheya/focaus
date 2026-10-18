@@ -11,8 +11,8 @@
 - 后续优先验证受控模板/数学（N负责确定性、A负责语义）、F的WKWebView资源/无障碍、N索引/查询与E文字锚点、focaus必要衔接与双证据截止；具体库未锁定，默认范围/算法是工程推荐。
 
 ## Active: G0/G1 and Four Persistent Development Chats
-- G0 active：2026-10-18用户允许Git初始化。初始main仅纳管工程七文档、非敏感continuity及.gitignore；总控codex/focaus-integration，四路frontend/native/ai/materials从G1精确提交各自建worktree。详见docs/DEVELOPMENT.md；本地整合授权待答。
-- G1 planned：C01–C09单源跨语言类型/Schema、错误与capability、旧包适配/拒写/降级、最小SQL迁移、公共traits与composition stub、脱敏正反例及可重复检查；通过后本地提交共同基线。
+- G0 done：2026-10-18用户允许Git初始化。初始main仅纳管工程七文档、非敏感continuity及.gitignore；总控codex/focaus-integration，四路frontend/native/ai/materials从G1精确提交各自建worktree。详见docs/DEVELOPMENT.md；本地整合授权待答。
+- G1 active（本地验证通过，提交共同基线后转done）：C01–C09单源跨语言类型/Schema、错误与capability、旧包适配/拒写/降级、最小SQL迁移、公共traits与composition stub、脱敏正反例及可重复检查；通过后本地提交共同基线。
 - G2–G5 planned：先可靠本地链与早期U11–U13，再获得云授权后的真实ASR/进度/focaus，随后三层/编辑/引用/对象与搜索，最后真实课程1倍速/课后全量/长录音恢复/课堂包。各模块commit或fixture通过不能关闭全体验收。
 - 四路尚未创建；将使用PARALLEL_DELIVERY §7.2–7.5及原样消息授权，记录真实thread/host/path/branch/SHA和配置读回证据。总控唯一维护公共文件与continuity，持续read_thread/wait_threads复核并整合。
 - 产品模型/专用凭据继续INTERFACES §9.1，真实云调用/上传尚未获本阶段明确授权。qta先本地轨道核验与内容对齐，不按编号配课、不混轨、旧转写非真值。

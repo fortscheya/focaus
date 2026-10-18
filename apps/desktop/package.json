@@ -1,0 +1,12 @@
+{
+  "name": "@focaus/desktop", "version": "0.1.0", "private": true, "type": "module",
+  "scripts": {"dev": "vite --host 127.0.0.1", "build": "tsc --noEmit && vite build", "typecheck": "tsc --noEmit", "test": "vitest run"},
+  "dependencies": {
+    "@focaus/contracts": "workspace:*", "@heroui/react": "^3.0.0", "@heroui/styles": "^3.0.0",
+    "react": "^19.0.0", "react-dom": "^19.0.0", "@tauri-apps/api": "^2.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0", "@types/react-dom": "^19.0.0", "@vitejs/plugin-react": "^5.0.0",
+    "vite": "^7.0.0", "typescript": "^5.9.0", "tailwindcss": "^4.0.0", "@tailwindcss/vite": "^4.0.0", "vitest": "^3.0.0", "jsdom": "^26.0.0"
+  }
+}

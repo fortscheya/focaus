@@ -1,0 +1,42 @@
+{
+  "profile": "nfc_casefold_ws_v1",
+  "unicode_version": "15.0.0",
+  "cases": [
+    {
+      "text": "Straße",
+      "normalized": "strasse",
+      "query": "SS",
+      "original_range": [
+        4,
+        5
+      ]
+    },
+    {
+      "text": "Café 😀",
+      "normalized": "café 😀",
+      "query": "é",
+      "original_range": [
+        3,
+        5
+      ]
+    },
+    {
+      "text": "学\t \n习",
+      "normalized": "学 习",
+      "query": "学 习",
+      "original_range": [
+        0,
+        5
+      ]
+    },
+    {
+      "text": "😀学习😀",
+      "normalized": "😀学习😀",
+      "query": "学习",
+      "original_range": [
+        1,
+        3
+      ]
+    }
+  ]
+}

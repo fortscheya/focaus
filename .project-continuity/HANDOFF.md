@@ -6,10 +6,10 @@
 - 当前总控01a14cae-d8ce-7053-bd12-737ea1bef020 / local；项目f2e92149-ba53-44f1-87ed-848b34650309。
 
 ## State / Next
-- 已初始化main；初始纳管27个非敏感工程/continuity/忽略文件，白名单检查通过，提交待执行。
-- G1未完成；四开发对话未创建；本地整合授权问题待答。实施登记docs/DEVELOPMENT.md。
+- G0已提交3312e4e；当前codex/focaus-integration，G1单源契约/迁移/traits/fixtures已实现，Python11/Rust5/TS37例及占位构建通过，准备提交。
+- G1本地验证完成；四开发对话未创建；本地整合授权问题待答。实施登记docs/DEVELOPMENT.md。
 - G1要交C01–C09单源类型/Schema/迁移/公共traits/正反例，contract2.0.0、material2.0.0、visualization1.0.0；真实旧包适配和未知拒写/降级。
-- 当前Rust未安装，隔离准备工具链；Node用已发现bundled runtime，不改全局shell。
+- Rust1.99.1已在主目录.local隔离安装；Node用已发现bundled runtime，不改全局shell。
 - G2可靠本地链→G3获云授权后真实ASR/进度/focaus→G4三层/对象/编辑/引用/搜索→G5真实课程。
 
 ## Constraints
