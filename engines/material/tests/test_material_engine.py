@@ -499,6 +499,160 @@ class MaterialEngineTests(TestCase):
         self.assertEqual(responses[-1]["kind"], "error")
         self.assertEqual(responses[-1]["payload"]["error"]["code"], "CANCELLED")
 
+    def test_jsonl_progress_identity_order_cancel_resume_and_final_parent(self):
+        source = self.root / "progress-shape.pdf"
+        make_pdf(source, ["page-{}".format(index) for index in range(20)])
+        values, payload = self.payload(source, pages=list(range(20)), stage_name="progress-shape")
+        environment = os.environ.copy()
+        environment["PYTHONPATH"] = str(Path(__file__).parents[1])
+        process = None
+        line_queue = None
+
+        def start_process():
+            nonlocal process, line_queue
+            process = subprocess.Popen(
+                [sys.executable, "-m", "material_engine"],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1,
+                env=environment,
+                cwd=str(Path.cwd()),
+            )
+            line_queue = queue.Queue()
+            current_stream = process.stdout
+
+            def read_lines():
+                for line in current_stream:
+                    line_queue.put(line)
+                line_queue.put(None)
+
+            threading.Thread(target=read_lines, daemon=True).start()
+
+        def send(request):
+            process.stdin.write(json.dumps(request, ensure_ascii=False) + "\n")
+            process.stdin.flush()
+
+        def read_until(predicate, timeout=30):
+            found = []
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                try:
+                    line = line_queue.get(timeout=max(0.05, deadline - time.monotonic()))
+                except queue.Empty:
+                    continue
+                if line is None:
+                    break
+                value = json.loads(line)
+                found.append(value)
+                if predicate(value):
+                    return found
+            self.fail("sidecar did not emit expected progress event; received {}".format([item.get("kind") for item in found]))
+
+        def stop_process():
+            if process is None:
+                return
+            if process.stdin:
+                process.stdin.close()
+            process.wait(timeout=30)
+            if process.stdout:
+                process.stdout.close()
+            if process.stderr:
+                process.stderr.close()
+
+        try:
+            start_process()
+            handshake_request = {"contract_version": "2.0.0", "request_id": str(uuid.uuid4()), "name": "handshake", "task_id": None, "payload": {}}
+            send(handshake_request)
+            ready_events = read_until(lambda value: value.get("kind") == "ready")
+            ready = ready_events[-1]
+            self.assertEqual(ready["request_id"], handshake_request["request_id"])
+            self.assertIsNone(ready["task_id"])
+
+            convert_request = {"contract_version": "2.0.0", "request_id": str(uuid.uuid4()), "name": "convert", "task_id": values[3], "payload": payload}
+            send(convert_request)
+            first_page_events = read_until(
+                lambda value: value.get("kind") == "checkpoint" and value.get("payload", {}).get("state") == "running"
+            )
+            page_result = next(value for value in first_page_events if value.get("kind") == "page_result")
+            running_checkpoint = next(value for value in first_page_events if value.get("kind") == "checkpoint")
+            self.assertLess(first_page_events.index(page_result), first_page_events.index(running_checkpoint))
+            self.assertEqual(page_result["request_id"], convert_request["request_id"])
+            self.assertEqual(page_result["task_id"], values[3])
+            page_payload = page_result["payload"]
+            self.assertEqual(page_payload["material_id"], values[0])
+            self.assertEqual(page_payload["source_version_id"], values[1])
+            self.assertEqual(page_payload["source_hash"], page_payload["manifest"]["source_hash"])
+            self.assertEqual(page_payload["parse_version_id"], page_payload["manifest"]["parse_version_id"])
+            self.assertEqual(page_payload["parent_parse_version_id"], page_payload["manifest"]["parent_parse_version_id"])
+            self.assertEqual(page_payload["progress"]["material_id"], values[0])
+            self.assertEqual(page_payload["progress"]["publication_parse_version_id"], page_payload["parse_version_id"])
+            self.assertEqual(page_payload["progress"]["publication_parent_parse_version_id"], page_payload["parent_parse_version_id"])
+
+            cancel_request = {"contract_version": "2.0.0", "request_id": str(uuid.uuid4()), "name": "cancel", "task_id": values[3], "payload": {}}
+            send(cancel_request)
+            cancelled_events = read_until(
+                lambda value: value.get("kind") == "error" and value.get("payload", {}).get("error", {}).get("code") == "CANCELLED"
+            )
+            cancel_checkpoint = next(
+                value
+                for value in cancelled_events
+                if value.get("kind") == "checkpoint" and value.get("payload", {}).get("state") == "cancel_requested"
+            )
+            self.assertEqual(cancel_checkpoint["request_id"], cancel_request["request_id"])
+            self.assertEqual(cancel_checkpoint["task_id"], values[3])
+            checkpoint = json.loads((self.root / "progress-shape" / "checkpoint.json").read_text())
+            self.assertEqual(checkpoint["material_id"], values[0])
+            self.assertEqual(checkpoint["source_version_id"], values[1])
+            self.assertLess(len(checkpoint["completed_pages"]), 20)
+            stop_process()
+            process = None
+
+            start_process()
+            resume_handshake = {"contract_version": "2.0.0", "request_id": str(uuid.uuid4()), "name": "handshake", "task_id": None, "payload": {}}
+            send(resume_handshake)
+            ready = read_until(lambda value: value.get("kind") == "ready")[-1]
+            self.assertEqual(ready["request_id"], resume_handshake["request_id"])
+            resume_request = {"contract_version": "2.0.0", "request_id": str(uuid.uuid4()), "name": "resume", "task_id": values[3], "payload": dict(payload)}
+            send(resume_request)
+            resume_events = read_until(lambda value: value.get("kind") == "completed", timeout=45)
+            for event in resume_events:
+                self.assertEqual(event["request_id"], resume_request["request_id"])
+                self.assertEqual(event["task_id"], values[3])
+            page_positions = [index for index, event in enumerate(resume_events) if event.get("kind") == "page_result"]
+            running_positions = [
+                index
+                for index, event in enumerate(resume_events)
+                if event.get("kind") == "checkpoint" and event.get("payload", {}).get("state") == "running"
+            ]
+            completed_checkpoint_position = next(
+                index
+                for index, event in enumerate(resume_events)
+                if event.get("kind") == "checkpoint" and event.get("payload", {}).get("state") == "completed"
+            )
+            completed_position = next(index for index, event in enumerate(resume_events) if event.get("kind") == "completed")
+            self.assertTrue(page_positions)
+            self.assertTrue(running_positions)
+            self.assertLess(page_positions[0], running_positions[0])
+            self.assertLess(max(page_positions), completed_checkpoint_position)
+            self.assertLess(completed_checkpoint_position, completed_position)
+            completed_payload = resume_events[completed_position]["payload"]
+            final_manifest = completed_payload["manifest"]
+            self.assertEqual(completed_payload["material_id"], values[0])
+            self.assertEqual(completed_payload["source_version_id"], values[1])
+            self.assertEqual(completed_payload["source_hash"], final_manifest["source_hash"])
+            self.assertEqual(completed_payload["parse_version_id"], final_manifest["parse_version_id"])
+            self.assertIsNone(completed_payload["parent_parse_version_id"])
+            self.assertEqual(completed_payload["progress"]["state"], "completed")
+            self.assertEqual(completed_payload["progress"]["parse_version_id"], final_manifest["parse_version_id"])
+            self.assertEqual(completed_payload["progress"]["publication_parse_version_id"], completed_payload["parse_version_id"])
+            self.assertEqual(completed_payload["progress"]["publication_parent_parse_version_id"], completed_payload["parent_parse_version_id"])
+            self.assertEqual(len(final_manifest["pages"]), 20)
+        finally:
+            if process is not None:
+                stop_process()
+
     def test_jsonl_escapes_backslash_nul_and_c1_text(self):
         source = self.root / "control-text.pdf"
         make_pdf(source, ["literal\\u0000\\\\tail\x00\x81学习"])

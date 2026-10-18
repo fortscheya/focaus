@@ -33,7 +33,9 @@ manifest provenance 中标为 `engine_candidate_requires_host_confirmation`，�
 保留给最终快照，`manifest.json` 只是可替换的恢复/head 副本，不能作为历史快照
 身份。`page_result` 顶层同时携带 `material_id`、`source_version_id`、`source_hash`，
 以及当前页的 `page`、`regions`、`objects`、`resources` 和 `search_units` 闭包；
-这些页级字段与其 `snapshot_parse_version_id` 使用同一组锚点。page checkpoint
+这些页级字段与其 `snapshot_parse_version_id` 使用同一组锚点，并带有与磁盘
+checkpoint 相同的 `progress` identity。`completed` 也重复提供最终 manifest 的
+identity 与 `progress`，便于宿主在不解析内部路径的情况下核对任务结果。page checkpoint
 之间的父链只用于 sidecar 恢复；`completed` 的最终 manifest 始终保留宿主已经
 确认的 `parent_parse_version_id`，不会把内部 checkpoint 当成宿主父版本。单页解析、渲染
 或对象重构失败会保留该页的 `failed` 或 `partial` 状态并继续其他页；只有输入

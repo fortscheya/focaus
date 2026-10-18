@@ -219,6 +219,7 @@ class MaterialEngine:
         *,
         page: Optional[PageDraft] = None,
         publication_sequence: Optional[int] = None,
+        progress: Optional[dict] = None,
     ) -> dict:
         """Build a detached page result so later correction/reparse cannot mutate it."""
         payload = {
@@ -236,6 +237,8 @@ class MaterialEngine:
         }
         if publication_sequence is not None:
             payload["publication_sequence"] = publication_sequence
+        if progress is not None:
+            payload["progress"] = deepcopy(progress)
         if page is not None:
             page_value = next(
                 (value for value in manifest.get("pages", []) if value.get("page_id") == page.page_id),
@@ -605,10 +608,19 @@ class MaterialEngine:
             write_manifest(staging_root, manifest)
             return manifest, path
 
-        def emit_page(manifest: dict, path: Path, page: PageDraft, sequence: int) -> None:
+        def emit_page(manifest: dict, path: Path, page: PageDraft, sequence: int, progress: dict) -> None:
             if on_page is None:
                 return
-            on_page(self._snapshot_payload(manifest, path, staging_root, page=page, publication_sequence=sequence))
+            on_page(
+                self._snapshot_payload(
+                    manifest,
+                    path,
+                    staging_root,
+                    page=page,
+                    publication_sequence=sequence,
+                    progress=progress,
+                )
+            )
 
         try:
             for page_index in pages_to_process:
@@ -662,8 +674,11 @@ class MaterialEngine:
                 checkpoint_value = {
                     "contract_version": CONTRACT_VERSION,
                     "task_id": task_id,
+                    "material_id": payload["material_id"],
                     "parse_version_id": parse_version_id,
                     "parent_parse_version_id": parent_parse_version_id,
+                    "publication_parse_version_id": manifest["parse_version_id"],
+                    "publication_parent_parse_version_id": manifest["parent_parse_version_id"],
                     "source_version_id": payload["source_version_id"],
                     "head_parse_version_id": head_id,
                     "published_parse_versions": list(published_parse_versions),
@@ -676,9 +691,9 @@ class MaterialEngine:
                     "state": "running",
                 }
                 write_checkpoint(staging_root, checkpoint_value)
+                emit_page(manifest, snapshot, draft, sequence, checkpoint_value)
                 if on_checkpoint is not None:
                     on_checkpoint(deepcopy(checkpoint_value))
-                emit_page(manifest, snapshot, draft, sequence)
                 if cancel_event.is_set():
                     raise EngineError("CANCELLED", "conversion was cancelled", retryable=True, scope="task")
 
@@ -709,8 +724,11 @@ class MaterialEngine:
             completed_checkpoint = {
                 "contract_version": CONTRACT_VERSION,
                 "task_id": task_id,
+                "material_id": payload["material_id"],
                 "parse_version_id": parse_version_id,
                 "parent_parse_version_id": parent_parse_version_id,
+                "publication_parse_version_id": final_manifest["parse_version_id"],
+                "publication_parent_parse_version_id": final_manifest["parent_parse_version_id"],
                 "source_version_id": payload["source_version_id"],
                 "head_parse_version_id": parse_version_id,
                 "published_parse_versions": list(published_parse_versions),
@@ -726,6 +744,14 @@ class MaterialEngine:
             if on_checkpoint is not None:
                 on_checkpoint(deepcopy(completed_checkpoint))
             return {
+                "format": final_manifest["format"],
+                "format_version": final_manifest["format_version"],
+                "material_id": final_manifest["material_id"],
+                "source_version_id": final_manifest["source_version_id"],
+                "source_hash": final_manifest["source_hash"],
+                "parse_version_id": final_manifest["parse_version_id"],
+                "parent_parse_version_id": final_manifest["parent_parse_version_id"],
+                "progress": deepcopy(completed_checkpoint),
                 "manifest": final_manifest,
                 "manifest_path": str(final_snapshot),
                 "head_manifest_path": str(head_path),
