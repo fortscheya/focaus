@@ -29,6 +29,27 @@ def _write_json(path: Path, value: dict) -> None:
     os.replace(str(temporary), str(path))
 
 
+def _rebind_material_selectors(value, parse_version_id: str):
+    """Copy a manifest value and bind nested material selectors to its snapshot.
+
+    Extractors build page and search anchors before a publication ID exists, so
+    their selectors initially carry ``ctx.parse_version_id``.  A page
+    checkpoint has its own immutable publication ID and must expose that ID at
+    every nested ``MaterialSelector`` as well.  The recursive copy keeps the
+    drafts reusable for later checkpoints and deliberately changes only
+    material selectors; correction records retain the parse version they were
+    submitted against.
+    """
+    if isinstance(value, dict):
+        rebound = {key: _rebind_material_selectors(item, parse_version_id) for key, item in value.items()}
+        if value.get("kind") == "material_region" and "parse_version_id" in value:
+            rebound["parse_version_id"] = parse_version_id
+        return rebound
+    if isinstance(value, list):
+        return [_rebind_material_selectors(item, parse_version_id) for item in value]
+    return value
+
+
 def _coverage(ctx: ExtractionContext, drafts: Sequence[PageDraft], expected_page_count: Optional[int] = None) -> dict:
     requested_pages = [draft.page_id for draft in drafts]
     processed_pages = [draft.page_id for draft in drafts if draft.processed_for_search]
@@ -73,10 +94,12 @@ def assemble_manifest(
 ) -> dict:
     draft_list = sorted(list(drafts), key=lambda draft: draft.index)
     coverage = _coverage(ctx, draft_list, expected_page_count)
-    pages = [draft.page for draft in draft_list]
-    regions = [region for draft in draft_list for region in draft.regions]
-    objects = [obj for draft in draft_list for obj in draft.objects]
-    search_units = [unit for draft in draft_list for unit in draft.search_units]
+    parse_version_id = publication_parse_version_id or ctx.parse_version_id
+    parent_parse_version_id = publication_parent_parse_version_id if publication_parent_parse_version_id is not None else ctx.parent_parse_version_id
+    pages = [_rebind_material_selectors(draft.page, parse_version_id) for draft in draft_list]
+    regions = [_rebind_material_selectors(region, parse_version_id) for draft in draft_list for region in draft.regions]
+    objects = [_rebind_material_selectors(obj, parse_version_id) for draft in draft_list for obj in draft.objects]
+    search_units = [_rebind_material_selectors(unit, parse_version_id) for draft in draft_list for unit in draft.search_units]
     statuses = [page["status"] for page in pages]
     if not pages or all(status == "failed" for status in statuses):
         completion = "failed"
@@ -103,8 +126,7 @@ def assemble_manifest(
     }
     if provenance_extra:
         provenance.update(deepcopy(provenance_extra))
-    parse_version_id = publication_parse_version_id or ctx.parse_version_id
-    parent_parse_version_id = publication_parent_parse_version_id if publication_parent_parse_version_id is not None else ctx.parent_parse_version_id
+    provenance = _rebind_material_selectors(provenance, parse_version_id)
     manifest = {
         "format": MATERIAL_FORMAT,
         "format_version": MATERIAL_FORMAT_VERSION,

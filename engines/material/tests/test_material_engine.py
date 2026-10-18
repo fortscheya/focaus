@@ -58,6 +58,19 @@ def make_rich_pptx(path: Path):
         archive.writestr("ppt/charts/chart1.xml", chart)
 
 
+def material_selector_parse_versions(value):
+    versions = []
+    if isinstance(value, dict):
+        if value.get("kind") == "material_region" and "parse_version_id" in value:
+            versions.append(value["parse_version_id"])
+        for nested in value.values():
+            versions.extend(material_selector_parse_versions(nested))
+    elif isinstance(value, list):
+        for nested in value:
+            versions.extend(material_selector_parse_versions(nested))
+    return versions
+
+
 class MaterialEngineTests(TestCase):
     def setUp(self):
         self.root = Path(tempfile.mkdtemp(prefix="focaus-material-test-"))
@@ -147,6 +160,10 @@ class MaterialEngineTests(TestCase):
             self.assertTrue(snapshot_path.is_file())
             snapshot = json.loads(snapshot_path.read_text())
             self.assertEqual(snapshot["parse_version_id"], parse_version_id)
+            self.assertEqual(
+                set(material_selector_parse_versions(snapshot)),
+                {parse_version_id},
+            )
             parent = snapshot.get("parent_parse_version_id")
             if parent is not None:
                 self.assertTrue((snapshot_path.parent / (parent + ".json")).is_file())
