@@ -180,7 +180,7 @@ impl Store {
             let request_hash=canonical_hash(&json!({"name":name,"payload":command.payload,"expected_revisions":command.expected_revisions,"window_id":command.window_id,"version":command.contract_version}));
             let prior:Option<(String,String)>=c.query_row("SELECT request_hash,response_json FROM idempotency WHERE actor_id=?1 AND command_name=?2 AND idempotency_key=?3",params![actor_id,name,key],|r|Ok((r.get(0)?,r.get(1)?))).optional().map_err(sql_error)?;
             if let Some((hash,response))=prior {if hash!=request_hash{return Err(error(ErrorCode::IdempotencyMismatch,"Intent key reused with different input"));}let mut response:CommandResult=decode(&response)?;response.command_id=command.command_id.clone();return Ok(Some(response));}
-            if let Some(revisions)=&command.expected_revisions {for (id,rev) in revisions {check_revision(c,id,rev)?;}}
+            if let Some(revisions)=&command.expected_revisions {for (id,rev) in revisions {check_command_revision(c,command,id,rev)?;}}
             Ok(None)
         })
     }
@@ -209,7 +209,7 @@ impl Store {
                 result.command_id=command.command_id.clone();
                 return Ok(result);
             }
-            if let Some(revisions)=&command.expected_revisions { for (entity,revision) in revisions { check_revision(t,entity,revision)?; } }
+            if let Some(revisions)=&command.expected_revisions { for (entity,revision) in revisions { check_command_revision(t,command,entity,revision)?; } }
             let before=sequence(t)?;
             let result = f(t)?;
             let mut revisions=BTreeMap::new();
@@ -304,6 +304,55 @@ pub(crate) fn check_revision(c: &Connection, entity: &str, revision: &str) -> Re
     }
     Ok(())
 }
+fn check_command_revision(
+    c: &Connection,
+    command: &Command,
+    entity: &str,
+    revision: &str,
+) -> Result<()> {
+    let name = value(&command.name)?.as_str().unwrap_or("").to_owned();
+    if !["recording.pause", "recording.stop", "recording.resume"].contains(&name.as_str())
+        || command.payload["recording_id"].as_str() != Some(entity)
+    {
+        return check_revision(c, entity, revision);
+    }
+    let current = head(c, entity)?;
+    if current["revision_id"].as_str() == Some(revision) {
+        return Ok(());
+    }
+    let old: Option<String> = c
+        .query_row(
+            "SELECT body_json FROM revisions WHERE entity_id=?1 AND revision_id=?2",
+            params![entity, revision],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(sql_error)?
+        .flatten();
+    let Some(old) = old else {
+        return Err(error(
+            ErrorCode::Conflict,
+            "Recording control base is unavailable",
+        ));
+    };
+    let mut old: Value = decode(&old)?;
+    let mut current = current;
+    for key in ["revision_id", "entity_seq", "durable_watermark_ms"] {
+        if let Some(o) = old.as_object_mut() {
+            o.remove(key);
+        }
+        if let Some(o) = current.as_object_mut() {
+            o.remove(key);
+        }
+    }
+    if old != current {
+        return Err(error(
+            ErrorCode::Conflict,
+            "Recording control state or assignment changed",
+        ));
+    }
+    Ok(())
+}
 pub(crate) fn head(c: &Connection, entity: &str) -> Result<Value> {
     if lifecycle(c, entity)? == "deleted" {
         return Err(error(
@@ -319,12 +368,58 @@ pub(crate) fn commit_entity(
     t: &Transaction<'_>,
     entity: &str,
     kind: &str,
+    body: Value,
+    event_type: &str,
+    scope: Value,
+    cause: Option<&str>,
+    task: Option<&str>,
+) -> Result<Value> {
+    commit_version(t, entity, kind, &id(), body, event_type, scope, cause, task)
+}
+/// Host-confirmed immutable import versions preserve engine object/revision IDs.
+/// Collision checks run before any head is advanced.
+pub(crate) fn commit_version(
+    t: &Transaction<'_>,
+    entity: &str,
+    kind: &str,
+    revision: &str,
     mut body: Value,
     event_type: &str,
     scope: Value,
     cause: Option<&str>,
     task: Option<&str>,
 ) -> Result<Value> {
+    let existing: Option<(String, String)> = t
+        .query_row(
+            "SELECT entity_id,content_hash FROM revisions WHERE revision_id=?1",
+            [revision],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+        .map_err(sql_error)?;
+    if let Some((owner, hash)) = existing {
+        if owner == entity && hash == canonical_hash(&body) {
+            return Ok(body);
+        }
+        return Err(error(
+            ErrorCode::Conflict,
+            "Immutable revision identity conflicts with stored content",
+        ));
+    }
+    let old_kind: Option<String> = t
+        .query_row(
+            "SELECT kind FROM entities WHERE entity_id=?1",
+            [entity],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(sql_error)?;
+    if old_kind.as_ref().is_some_and(|old| old != kind) {
+        return Err(error(
+            ErrorCode::Conflict,
+            "Entity identity belongs to a different kind",
+        ));
+    }
     let current: Option<(Option<String>, u64, String)> = t
         .query_row(
             "SELECT revision_id,entity_seq,lifecycle FROM entities WHERE entity_id=?1",
@@ -339,7 +434,6 @@ pub(crate) fn commit_entity(
             "Entity permanently deleted",
         ));
     }
-    let revision = id();
     let seq = current.as_ref().map(|x| x.1 + 1).unwrap_or(1);
     if let Some(o) = body.as_object_mut() {
         if o.contains_key("revision_id") {
@@ -380,7 +474,7 @@ pub(crate) fn commit_entity(
         seq,
         &revision,
         scope,
-        json!({"entity_id":entity,"revision_id":revision}),
+        json!({"entity_id":entity,"entity_kind":kind,"revision_id":revision,"recording_id":body.get("recording_id")}),
         cause,
         task,
     )?;

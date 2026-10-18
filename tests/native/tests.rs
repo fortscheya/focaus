@@ -961,3 +961,86 @@ fn stable_window_binding_and_initial_standalone_failure_preserve_workspace() {
         ContentViewState::Open
     );
 }
+
+#[test]
+fn persisted_capture_watermark_is_typed_and_stop_rebases_only_watermark_growth() {
+    let db = TestLibrary::new();
+    let win = storage::id();
+    let recording = reserve(&db.store);
+    let rid = recording["recording_id"].as_str().unwrap();
+    let mut stop = command(
+        "recording.stop",
+        &win,
+        json!({"recording_id":rid,"expected_state":"starting"}),
+    );
+    stop.expected_revisions = Some(BTreeMap::from([(
+        rid.into(),
+        recording["revision_id"].as_str().unwrap().into(),
+    )]));
+    let mut writer = audio::SegmentWriter::create(
+        &db.path,
+        audio::SegmentMeta::new(rid, 48000, 1, 0, 0).unwrap(),
+    )
+    .unwrap();
+    writer.append(&[0.; 4800]).unwrap();
+    writer.seal(&db.store, false).unwrap();
+    assert_eq!(db.store.head(rid).unwrap()["durable_watermark_ms"], 100);
+    assert!(db.store.preflight(&win, &stop).unwrap().is_none());
+    let (_, events) = db.store.read(|c| storage::events(c, 0, 100)).unwrap();
+    let coverage = events
+        .iter()
+        .find(|e| e.event_type == "recording.coverage_changed")
+        .unwrap();
+    assert_eq!(coverage.payload["recording_id"], rid);
+    assert_ne!(coverage.entity_id, rid);
+    let watermark = events
+        .iter()
+        .find(|e| {
+            e.event_type == "recording.state_changed"
+                && e.payload.get("change_kind") == Some(&json!("durable_watermark"))
+        })
+        .unwrap();
+    assert_eq!(watermark.entity_id, rid);
+    validate("RecordingSession", &db.store.head(rid).unwrap()).unwrap();
+    let receipt = db
+        .store
+        .command(&win, &stop, |t| {
+            capture::state_transaction(t, rid, "stopped", Some(&stop.command_id))
+        })
+        .unwrap();
+    assert_eq!(receipt.result.unwrap()["state"], "stopped");
+    let mut newer = stop;
+    newer.idempotency_key = Some(storage::id());
+    assert_eq!(
+        db.store.preflight(&win, &newer).unwrap_err().code,
+        ErrorCode::Conflict
+    );
+}
+
+#[test]
+fn old_stop_request_cannot_cross_pause_or_assignment_epoch() {
+    for changed in ["paused", "assignment"] {
+        let db = TestLibrary::new();
+        let win = storage::id();
+        let recording = reserve(&db.store);
+        let rid = recording["recording_id"].as_str().unwrap();
+        let mut stop = command(
+            "recording.stop",
+            &win,
+            json!({"recording_id":rid,"expected_state":"starting"}),
+        );
+        stop.expected_revisions = Some(BTreeMap::from([(
+            rid.into(),
+            recording["revision_id"].as_str().unwrap().into(),
+        )]));
+        if changed == "paused" {
+            capture::set_state(&db.store, rid, "paused").unwrap();
+        } else {
+            db.store.write(|t|{t.execute("UPDATE recording_sessions SET assignment_epoch=assignment_epoch+1 WHERE recording_id=?1",[rid]).map_err(storage::sql_error)?;let mut head=storage::head(t,rid)?;head["assignment_epoch"]=json!(1);storage::commit_entity(t,rid,"recording",head,"recording.state_changed",json!({"kind":"global"}),None,None)?;Ok(())}).unwrap();
+        }
+        assert_eq!(
+            db.store.preflight(&win, &stop).unwrap_err().code,
+            ErrorCode::Conflict
+        );
+    }
+}

@@ -199,6 +199,10 @@ fn register_segment(store: &Store, m: &SegmentMeta, frames: u64, recovered: bool
         commit_entity(t,&m.span_id,"audio_span",span.clone(),"recording.coverage_changed",json!({"kind":"global"}),None,None)?;
         t.execute("INSERT INTO audio_spans(audio_span_id,recording_id,asset_id,track_id,start_frame,end_frame,start_ms,end_ms,mapping_revision_id,coverage_status,asr_coverage) VALUES(?1,?2,?3,'microphone',0,?4,?5,?6,?7,'captured','unsubmitted')",params![m.span_id,m.recording_id,m.asset_id,frames,m.start_ms,end_ms,m.mapping_id]).map_err(sql_error)?;
         t.execute("UPDATE recording_sessions SET durable_watermark_ms=MAX(durable_watermark_ms,?2) WHERE recording_id=?1",params![m.recording_id,end_ms]).map_err(sql_error)?;
+        let mut recording=crate::storage::head(t,&m.recording_id)?;
+        recording["durable_watermark_ms"]=json!(t.query_row("SELECT durable_watermark_ms FROM recording_sessions WHERE recording_id=?1",[&m.recording_id],|r|r.get::<_,u64>(0)).map_err(sql_error)?);
+        let recording=commit_entity(t,&m.recording_id,"recording",recording,"recording.state_changed",json!({"kind":"global"}),None,None)?;
+        t.execute("UPDATE outbox SET payload_json=?3 WHERE entity_id=?1 AND revision_id=?2 AND event_type='recording.state_changed'",params![m.recording_id,recording["revision_id"].as_str(),encode(&json!({"entity_id":m.recording_id,"entity_kind":"recording","recording_id":m.recording_id,"revision_id":recording["revision_id"],"change_kind":"durable_watermark","durable_watermark_ms":recording["durable_watermark_ms"]}))?]).map_err(sql_error)?;
         Ok(span.clone())
     })
 }
