@@ -40,6 +40,21 @@ pub enum DiscoveryDisposition {
     Unsupported,
 }
 
+/// Produce an auditable read-only degradation for an unknown template. The
+/// host must keep this as unsupported/static fallback and must not submit it as
+/// an editable visualization.
+pub fn unsupported_fallback(template_id: &str, reason: &str) -> Value {
+    json!({
+        "generation_status": "unsupported",
+        "template_id": template_id,
+        "write_allowed": false,
+        "fallback": {
+            "description": reason,
+            "table": [],
+        }
+    })
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ValidatedCandidate {
     pub candidate: VisualizationCandidate,
@@ -92,6 +107,9 @@ pub fn discover_candidate(
     }
     let candidate: VisualizationCandidate = serde_json::from_value(value)
         .map_err(|_| invalid("visual_candidate_schema_mismatch"))?;
+    if !input.supported_templates.iter().any(|id| id == &candidate.template_id) {
+        return Ok(DiscoveryDisposition::Unsupported);
+    }
     let validated = semantic_check(&candidate, input)?;
     Ok(DiscoveryDisposition::Candidate(validated))
 }
@@ -225,6 +243,7 @@ pub fn build_generation_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::binding_for_model;
     use focaus_contracts::{EvidenceCutoff, EvidenceCutoffStatus, InputSnapshot, Selector, TaskKind, WholeSelector};
 
     fn source() -> SourceRef {
@@ -257,6 +276,15 @@ mod tests {
     }
 
     #[test]
+    fn visualization_refuses_non_multimodal_binding() {
+        let input = input();
+        assert_eq!(validate_discover_binding(&input, &binding_for_model(ModelId::DecisionModelPreview)).unwrap_err().code, focaus_contracts::ErrorCode::InvalidArgument);
+        let mut wrong = input;
+        wrong.snapshot.model_id = Some(ModelId::DecisionModelPreview);
+        assert_eq!(validate_discover_binding(&wrong, &binding_for_model(ModelId::Qwen38Flash)).unwrap_err().code, focaus_contracts::ErrorCode::InvalidArgument);
+    }
+
+    #[test]
     fn duplicate_and_deleted_semantic_keys_are_noops() {
         let mut input = input();
         input.existing_keys.push("f(scope,concept)".into());
@@ -275,6 +303,9 @@ mod tests {
         let mut unsupported = curve();
         unsupported["template_id"] = json!("arbitrary_webgl");
         unsupported["template_version"] = json!("1.0.0");
-        assert_eq!(discover_candidate(&input, unsupported).unwrap_err().code, focaus_contracts::ErrorCode::InvalidResult);
+        assert_eq!(discover_candidate(&input, unsupported).unwrap(), DiscoveryDisposition::Unsupported);
+        let fallback = unsupported_fallback("arbitrary_webgl", "template_not_negotiated");
+        assert_eq!(fallback["generation_status"], "unsupported");
+        assert_eq!(fallback["write_allowed"], false);
     }
 }

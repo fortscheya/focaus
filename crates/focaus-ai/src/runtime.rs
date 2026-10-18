@@ -392,7 +392,7 @@ mod tests {
     use super::*;
     use crate::asr::build_stream_run_task;
     use crate::fixtures;
-    use focaus_contracts::{AudioSpanAsrCoverage, AudioSpanCoverageStatus, FrameRange, MappingSegment, ModelId, TimeMapping, TimelineRange, TaskKind};
+    use focaus_contracts::{AudioSpanAsrCoverage, AudioSpanCoverageStatus, CatchupCoverage, CatchupCoverageRangeStatus, CatchupResult, CatchupResultCompletionStatus, CatchupWindow, CurrentFocus, CurrentFocusActivity, CurrentFocusStatus, FrameRange, MappingSegment, ModelId, PathEdge, PathNode, ProgressBinding, TimeMapping, TimelineRange, TaskKind};
 
     fn mapping() -> TimeMapping {
         TimeMapping { mapping_revision_id: "00000000-0000-4000-8000-000000000001".into(), derived_asset_id: "00000000-0000-4000-8000-000000000002".into(), segments: vec![MappingSegment { derived_frames: FrameRange { start_frame: 0, end_frame: 1600 }, original_asset_id: "00000000-0000-4000-8000-000000000002".into(), original_track_id: "track".into(), original_frames: FrameRange { start_frame: 0, end_frame: 1600 }, timeline: TimelineRange { start_ms: 0, end_ms: 100 }, scale_num: 1, scale_den: 1, delay_frames: 0, max_error_ms: 0.0 }] }
@@ -430,5 +430,32 @@ mod tests {
         controller.start(1, 100).unwrap();
         controller.cancel(1).unwrap();
         assert!(controller.remaining_ms(200) < FOCAUS_DEADLINE_MS);
+    }
+
+    fn focaus_result(generation: u64, status: CatchupResultCompletionStatus) -> CatchupResult {
+        CatchupResult {
+            result_semantics: crate::catchup::FOCAUS_RESULT_SEMANTICS.into(),
+            result_id: "result".into(),
+            request_generation: generation,
+            snapshot_id: "snapshot".into(),
+            body_revision_id: "body".into(),
+            requested_window: CatchupWindow { recording_id: None, start_ms: None, end_ms: None, start_source: None },
+            effective_window: CatchupWindow { recording_id: None, start_ms: None, end_ms: None, start_source: None },
+            estimate_basis: "fixture".into(),
+            current_focus: CurrentFocus { topic: "topic".into(), problem: "problem".into(), activity: CurrentFocusActivity::Unknown, step: None, source_refs: vec![], status: CurrentFocusStatus::Unknown },
+            path_nodes: vec![PathNode { node_id: "node".into(), role: focaus_contracts::PathNodeRole::Current, fact_ids: vec![], definition_ids: vec![], binding_ids: vec![], body_block_ids: vec![], evidence_role: focaus_contracts::PathNodeEvidenceRole::Unknown, source_refs: vec![] }],
+            path_edges: vec![PathEdge { from_node_id: "node".into(), to_node_id: "node".into(), relation: focaus_contracts::PathEdgeRelation::Temporal, source_refs: vec![], certainty: focaus_contracts::PathEdgeCertainty::Unknown }],
+            prerequisites: vec![], prerequisites_reason: Some(focaus_contracts::CatchupResultPrerequisitesReasonValue::NoneNeeded), body: vec![], presentation_tier: 3, body_evidence_cutoff: vec![], body_generated_at: "2026-01-01T00:00:00Z".into(), progress_at_trigger: None, progress_unavailable_reason: Some("fixture".into()), progress_binding: ProgressBinding { lesson_id: "lesson".into(), recording_id: None, assignment_epoch: None, no_pointer_reason: Some("fixture".into()) }, coverage: CatchupCoverage { audio_gaps: vec![], asr_gaps: vec![], material_supplement_used: false, range_status: CatchupCoverageRangeStatus::Unknown }, limitations: vec![], completion_status: status, triggered_at: "2026-01-01T00:00:00Z".into(), completed_at: None, displayed_complete_elapsed_ms: None,
+        }
+    }
+
+    #[test]
+    fn focaus_controller_rejects_old_generation_and_late_complete_body() {
+        let mut controller = FocausController::default();
+        controller.start(2, 0).unwrap();
+        assert_eq!(controller.accept(&focaus_result(1, CatchupResultCompletionStatus::Complete), 100).unwrap_err().code, ErrorCode::StaleInput);
+        assert_eq!(controller.accept(&focaus_result(2, CatchupResultCompletionStatus::Complete), FOCAUS_DEADLINE_MS + 1).unwrap_err().code, ErrorCode::DeadlineExceeded);
+        controller.cancel(2).unwrap();
+        assert_eq!(controller.accept(&focaus_result(2, CatchupResultCompletionStatus::Partial), 100).unwrap_err().code, ErrorCode::Cancelled);
     }
 }

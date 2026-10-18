@@ -135,6 +135,39 @@ mod tests {
     }
 
     #[test]
+    fn every_product_model_has_only_its_dedicated_credential_slot() {
+        let matrix = [
+            (ModelId::QwenAudio31AsrFlashStreaming, CredentialRef::BailianBeijingAsrStreaming),
+            (ModelId::QwenAudio31AsrFlashFiletrans, CredentialRef::BailianBeijingAsrFiletrans),
+            (ModelId::DecisionModelPreview, CredentialRef::BailianBeijingProgress),
+            (ModelId::Qwen38Flash, CredentialRef::BailianBeijingMultimodal),
+        ];
+        for (model, credential) in &matrix {
+            let binding = binding_for_model(model.clone());
+            assert_eq!(&binding.credential_ref, credential);
+            assert!(binding_matches(&binding, model.clone()).is_ok());
+            for (other_model, other_credential) in &matrix {
+                if model != other_model {
+                    let mut cross = binding.clone();
+                    cross.model_id = other_model.clone();
+                    cross.credential_ref = other_credential.clone();
+                    assert!(binding_matches(&cross, model.clone()).is_err());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn binding_changes_are_rejected_before_any_provider_fallback() {
+        let mut binding = binding_for_model(ModelId::Qwen38Flash);
+        binding.region = "cn-shanghai".into();
+        assert_eq!(binding_matches(&binding, ModelId::Qwen38Flash).unwrap_err().message, "credential_binding_mismatch");
+        let mut binding = binding_for_model(ModelId::DecisionModelPreview);
+        binding.credential_ref = CredentialRef::BailianBeijingMultimodal;
+        assert_eq!(binding_matches(&binding, ModelId::DecisionModelPreview).unwrap_err().message, "credential_binding_mismatch");
+    }
+
+    #[test]
     fn provider_model_nickname_is_not_accepted_as_model_id() {
         assert!(model_from_json(&serde_json::json!("3.8Flash")).is_none());
         assert_eq!(compact_text("  A\n B  "), "a b");

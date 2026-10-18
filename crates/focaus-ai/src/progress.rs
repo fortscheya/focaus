@@ -287,6 +287,14 @@ mod tests {
     }
 
     #[test]
+    fn wrong_model_or_credential_slot_is_rejected_before_progress_request() {
+        let mut wrong_model = snapshot();
+        wrong_model.model_id = Some(ModelId::Qwen38Flash);
+        assert_eq!(build_system_one_request(&wrong_model, &binding_for_model(ModelId::DecisionModelPreview), &evidence(Some(1000))).unwrap_err().code, ErrorCode::InvalidArgument);
+        assert_eq!(build_system_one_request(&snapshot(), &binding_for_model(ModelId::Qwen38Flash), &evidence(Some(1000))).unwrap_err().code, ErrorCode::InvalidArgument);
+    }
+
+    #[test]
     fn thirty_second_age_sets_pending_update() {
         let d = ProgressDecision { snapshot_id: "snap".into(), lesson_id: "lesson".into(), recording_id: "rec".into(), assignment_epoch: 2, decision_seq: 4, calibration_seq: 3, evidence_cutoff_ms: Some(1000), position_status: ProgressStatePositionStatus::Located, page_id: Some("p1".into()), region_id: None, confidence: Some("high".into()) };
         let state = to_progress_state(&d, &evidence(Some(1000)), "snap", ProgressStateRecordingState::Recording).unwrap();

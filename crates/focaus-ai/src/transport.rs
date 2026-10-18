@@ -35,6 +35,15 @@ pub trait CredentialCapability: Send + Sync {
     fn bearer_token(&self, binding: &CredentialBinding) -> Result<String, SafeError>;
 }
 
+/// Fail closed when the host's secure resolver has no value. The token is
+/// checked only for presence and is never returned by this helper.
+pub fn validate_bearer_token(token: &str) -> Result<(), SafeError> {
+    if token.trim().is_empty() {
+        return Err(task_error(ErrorCode::AuthRequired, "provider_credential_missing", false));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone)]
 pub struct JsonResponse {
     pub status: u16,
@@ -111,6 +120,13 @@ impl<C> ReqwestTransport<C>
 where
     C: CredentialCapability + 'static,
 {
+    fn acquire_token(&self, binding: &CredentialBinding) -> Result<String, SafeError> {
+        validate_binding(binding)?;
+        let token = self.credentials.bearer_token(binding)?;
+        validate_bearer_token(&token)?;
+        Ok(token)
+    }
+
     /// Build the production transport with bounded connection/response
     /// behavior and redirects disabled.  Tests can still use the pure request
     /// builders without constructing this client.
@@ -141,7 +157,7 @@ where
         headers: &[(&str, &str)],
     ) -> Result<JsonResponse, SafeError> {
         validate_http_endpoint(endpoint, binding, &self.policy)?;
-        let token = self.credentials.bearer_token(binding)?;
+        let token = self.acquire_token(binding)?;
         validate_extra_headers(headers)?;
         let mut request = self.client.post(endpoint).bearer_auth(token).json(&body);
         if let Some(workspace_id) = &self.policy.workspace_id {
@@ -161,7 +177,7 @@ where
         binding: &CredentialBinding,
     ) -> Result<JsonResponse, SafeError> {
         validate_http_endpoint(endpoint, binding, &self.policy)?;
-        let token = self.credentials.bearer_token(binding)?;
+        let token = self.acquire_token(binding)?;
         let mut request = self.client.get(endpoint).bearer_auth(token);
         if let Some(workspace_id) = &self.policy.workspace_id {
             request = request.header("X-DashScope-WorkSpace", workspace_id);
@@ -180,7 +196,7 @@ where
         binding: &CredentialBinding,
     ) -> Result<ProviderWebSocket, SafeError> {
         validate_ws_endpoint(endpoint, binding, &self.policy)?;
-        let token = self.credentials.bearer_token(binding)?;
+        let token = self.acquire_token(binding)?;
         let request = build_ws_request(endpoint, binding, &self.policy, &token)?;
         let (socket, _) = timeout(CONNECT_TIMEOUT, connect_async(request))
             .await
@@ -476,5 +492,12 @@ mod tests {
         assert!(validate_extra_headers(&[("X-DashScope-WorkSpace", "other")]).is_err());
         assert!(validate_extra_headers(&[("X-DashScope-Async", "enable")]).is_ok());
         assert!(validate_extra_headers(&[("X-DashScope-Async", "disable")]).is_err());
+    }
+
+    #[test]
+    fn missing_or_blank_credential_is_auth_required_without_fallback() {
+        assert_eq!(validate_bearer_token("").unwrap_err().code, ErrorCode::AuthRequired);
+        assert_eq!(validate_bearer_token("  \n").unwrap_err().code, ErrorCode::AuthRequired);
+        validate_bearer_token("opaque-fixture-token").unwrap();
     }
 }

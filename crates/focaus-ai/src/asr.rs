@@ -792,6 +792,16 @@ mod tests {
     }
 
     #[test]
+    fn streaming_refuses_non_streaming_model_or_slot() {
+        let mut wrong_model = open();
+        wrong_model.snapshot.model_id = Some(ModelId::QwenAudio31AsrFlashFiletrans);
+        assert_eq!(validate_stream_open(&wrong_model).unwrap_err().code, ErrorCode::InvalidArgument);
+        let mut wrong_slot = open();
+        wrong_slot.binding = crate::binding_for_model(ModelId::Qwen38Flash);
+        assert_eq!(validate_stream_open(&wrong_slot).unwrap_err().code, ErrorCode::InvalidArgument);
+    }
+
+    #[test]
     fn filetrans_only_fills_holes_and_keeps_ambiguous_boundaries() {
         let stable = vec![TimedText { local_id: "s".into(), start_ms: 0, end_ms: 1000, text: "same words".into(), source: MergeSource::Streaming }];
         let duplicate = TimedText { local_id: "f".into(), start_ms: 100, end_ms: 900, text: "same  words".into(), source: MergeSource::FileTrans };
@@ -823,6 +833,10 @@ mod tests {
         let retry = plan_retry(&task_error(ErrorCode::NetworkUnavailable, "temporary", true), 1, 3, &binding).unwrap();
         assert!(matches!(retry, RetryPlan::Retry { next_attempt: 2, .. }));
         if let RetryPlan::Retry { binding: carried, .. } = retry { assert_eq!(carried, binding); }
+        let limited = plan_retry(&task_error(ErrorCode::RateLimited, "limited", true), 1, 3, &binding).unwrap();
+        assert!(matches!(limited, RetryPlan::Retry { binding: carried, .. } if carried == binding));
+        let auth = plan_retry(&task_error(ErrorCode::AuthRequired, "missing", false), 1, 3, &binding).unwrap();
+        assert_eq!(auth, RetryPlan::Fail);
     }
 
     #[test]

@@ -418,7 +418,7 @@ pub fn build_secondary_request(snapshot: &InputSnapshot, raw_text: &[RawTextUnit
 #[cfg(test)]
 mod tests {
     use super::*;
-    use focaus_contracts::{Selector, WholeSelector};
+    use focaus_contracts::{EvidenceCutoff, EvidenceCutoffStatus, ModelId, Selector, TaskKind, WholeSelector};
 
     fn source() -> SourceRef {
         SourceRef { entity_id: "u".into(), revision_id: "r".into(), content_hash: "h".into(), selector: Selector::V4(WholeSelector { kind: "whole".into() }) }
@@ -428,11 +428,22 @@ mod tests {
         RawTextUnit { utterance_id: "u".into(), recording_id: "rec".into(), text: text.into(), source_ref: source(), span_id: "span".into() }
     }
 
+    fn secondary_snapshot(model: ModelId) -> InputSnapshot {
+        InputSnapshot { snapshot_id: "snap".into(), parent_snapshot_id: None, contract_version: "2.0.0".into(), purpose: TaskKind::Secondary, target_id: "rec".into(), lesson_id: None, recording_id: Some("rec".into()), assignment_epoch: Some(1), sources: vec![source()], attachment_set_revision: "attach".into(), fact_set_revision: None, target_base_revision: None, edit_revision: None, language_tier: Some(3), evidence_cutoff: vec![EvidenceCutoff { recording_id: "rec".into(), end_ms: Some(10), status: EvidenceCutoffStatus::Known }], available_at: "2026-01-01T00:00:00Z".into(), executor_id: "ai".into(), executor_version: "1".into(), model_id: Some(model), region: Some("cn-beijing".into()), prompt_version: Some(PROMPT_SECONDARY_V1.into()), parameters_hash: "p".into(), calibration_seq: None, decision_seq: None }
+    }
+
     #[test]
     fn trimming_preserves_direct_speech_and_removes_fillers() {
         let result = build_secondary_segment("sec", "g", "r", &[unit("嗯 这个 theorem。。 holds")]).unwrap();
         assert_eq!(result.text, "theorem。 holds");
         assert!(result.text.contains("theorem"));
+    }
+
+    #[test]
+    fn secondary_rejects_non_multimodal_model_before_generation() {
+        assert!(validate_secondary_snapshot(&secondary_snapshot(ModelId::DecisionModelPreview)).is_err());
+        assert!(validate_secondary_snapshot(&secondary_snapshot(ModelId::QwenAudio31AsrFlashFiletrans)).is_err());
+        assert!(build_secondary_request(&secondary_snapshot(ModelId::Qwen38Flash), &[unit("it works")]).is_ok());
     }
 
     #[test]

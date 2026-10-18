@@ -428,4 +428,13 @@ mod tests {
         assert!(body["messages"][1]["content"][0]["text"].as_str().unwrap().contains(FOCAUS_RESULT_SEMANTICS));
         assert!(body.to_string().find("credential").is_none());
     }
+
+    #[test]
+    fn focaus_refuses_progress_or_asr_model_bindings() {
+        let mut wrong = input();
+        wrong.snapshot.model_id = Some(ModelId::DecisionModelPreview);
+        assert_eq!(build_generation_request(&wrong).unwrap_err().code, ErrorCode::InvalidArgument);
+        wrong.snapshot.model_id = Some(ModelId::QwenAudio31AsrFlashStreaming);
+        assert_eq!(build_generation_request(&wrong).unwrap_err().code, ErrorCode::InvalidArgument);
+    }
 }
