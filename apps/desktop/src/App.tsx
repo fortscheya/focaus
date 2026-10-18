@@ -215,7 +215,7 @@ export function App() {
         if (response.status === 'error') throw new Error(`事件 ${event.event_type} 的 content.get 失败：${response.error?.message ?? response.error?.code ?? 'unknown error'}`);
         if (isRecordingCoverageEvent) {
           const coverageRecord = asRecord(response.result);
-          const coverage = parseRecordingCoverage(coverageRecord?.asset ?? coverageRecord?.span ?? response.result);
+          const coverage = parseRecordingCoverage(coverageRecord?.asset ?? coverageRecord?.span ?? coverageRecord?.coverage ?? response.result);
           if (!coverage) throw new Error(`事件 ${event.event_type} 的 content.get 未返回合法 AudioAsset/AudioSpan`);
           contentHeadsRef.current[event.entity_id] = response.result;
           setNativeContentHeads({...contentHeadsRef.current});
