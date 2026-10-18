@@ -8,6 +8,7 @@ import {StatusBadge} from '../components/StatusBadge.tsx';
 const INITIAL_BODY = '卷积运算把局部窗口与卷积核逐项相乘再求和。当前窗口向右移动一个步幅，输出格只依赖这块区域。';
 const PROTECTED_TEXT = '卷积';
 const FIXTURE_HASH = 'b'.repeat(64);
+const NOTE_EXPECTED_REVISIONS = {[ids.note]: ids.revision};
 
 function scalarLength(value: string): number {
   return Array.from(value).length;
@@ -81,7 +82,7 @@ export function ContentEditor({adapter}: {adapter: HostAdapter}) {
     undoStack.current.push(previous);
     committedDraft.current = next;
     setPatchNotice(`已生成细粒度 ${patch.operation} patch · selector scalar ${patch.selector.kind === 'text' ? patch.selector.anchor.scalar_range.start : 'object'}`);
-    void adapter.invoke('content.patch', {patch, lease_epoch: 4}, makeEnvelope('content.patch'));
+    void adapter.invoke('content.patch', {patch, lease_epoch: 4}, makeEnvelope('content.patch', undefined, NOTE_EXPECTED_REVISIONS));
   };
 
   const updateDraft = (next: string) => {
@@ -129,12 +130,12 @@ export function ContentEditor({adapter}: {adapter: HostAdapter}) {
       }
       return next;
     });
-    void adapter.invoke('correction.accept', {suggestion_id: suggestion.id, base_revision: ids.revision, final_text: suggestion.suggestion}, makeEnvelope('correction.accept'));
+    void adapter.invoke('correction.accept', {suggestion_id: suggestion.id, base_revision: ids.revision, final_text: suggestion.suggestion}, makeEnvelope('correction.accept', undefined, NOTE_EXPECTED_REVISIONS));
   };
 
   const rejectSuggestion = (suggestion: CorrectionFixture) => {
     setSuggestions((current) => current.map((item) => item.id === suggestion.id ? {...item, state: 'rejected'} : item));
-    void adapter.invoke('correction.reject', {suggestion_id: suggestion.id, base_revision: ids.revision, final_text: suggestion.original}, makeEnvelope('correction.reject'));
+    void adapter.invoke('correction.reject', {suggestion_id: suggestion.id, base_revision: ids.revision, final_text: suggestion.original}, makeEnvelope('correction.reject', undefined, NOTE_EXPECTED_REVISIONS));
   };
 
   const acceptOrdinaryBatch = () => {
@@ -146,7 +147,7 @@ export function ContentEditor({adapter}: {adapter: HostAdapter}) {
     committedDraft.current = nextDraft;
     setDraft(nextDraft);
     setSuggestions((current) => current.map((suggestion) => ordinary.some((item) => item.id === suggestion.id) ? {...suggestion, state: 'accepted'} : suggestion));
-    void adapter.invoke('correction.accept_batch', {base_revision: ids.revision, suggestion_ids: ordinary.map((suggestion) => suggestion.id)}, makeEnvelope('correction.accept_batch'));
+    void adapter.invoke('correction.accept_batch', {base_revision: ids.revision, suggestion_ids: ordinary.map((suggestion) => suggestion.id)}, makeEnvelope('correction.accept_batch', undefined, NOTE_EXPECTED_REVISIONS));
   };
 
   const undo = () => {
@@ -159,14 +160,14 @@ export function ContentEditor({adapter}: {adapter: HostAdapter}) {
     setDraft(previous);
     committedDraft.current = previous;
     setPatchNotice('已请求宿主撤销最近一个 undo_group；fixture 只更新本地草稿。');
-    void adapter.invoke('content.undo', {undo_group_id: crypto.randomUUID(), current_revision: ids.revision}, makeEnvelope('content.undo'));
+    void adapter.invoke('content.undo', {undo_group_id: crypto.randomUUID(), current_revision: ids.revision}, makeEnvelope('content.undo', undefined, NOTE_EXPECTED_REVISIONS));
     if (current === previous) undo();
   };
 
   const selectLanguage = (tier: number) => {
     setLanguageRequested(tier);
     setLanguageStatus('generating');
-    void adapter.invoke('language.select', {lesson_id: ids.lesson, tier}, makeEnvelope('language.select'));
+    void adapter.invoke('language.select', {lesson_id: ids.lesson, tier}, makeEnvelope('language.select', undefined, {[ids.lesson]: ids.revision}));
     window.setTimeout(() => {
       setLanguageActual(tier);
       setLanguageStatus('ready');
@@ -198,7 +199,7 @@ export function ContentEditor({adapter}: {adapter: HostAdapter}) {
       undo_group_id: crypto.randomUUID(),
       created_at: new Date().toISOString(),
     };
-    void adapter.invoke('content.patch', {patch, lease_epoch: 4}, makeEnvelope('content.patch'));
+    void adapter.invoke('content.patch', {patch, lease_epoch: 4}, makeEnvelope('content.patch', undefined, NOTE_EXPECTED_REVISIONS));
     setPatchNotice('表格单元格已生成 cell_set patch；未改变共同 Fact 集。');
   };
 
@@ -238,7 +239,7 @@ export function ContentEditor({adapter}: {adapter: HostAdapter}) {
               onBeforeInput={onBeforeInput}
               onCompositionStart={() => {
                 setCompositionActive(true);
-                void adapter.invoke('edit.begin', {lease: {view_id: ids.view, target_id: ids.note, selectors: [makeTextSelector(0, scalarLength(PROTECTED_TEXT))], lease_epoch: 4, composition_active: true, draft_revision: ids.revision}}, makeEnvelope('edit.begin'));
+                void adapter.invoke('edit.begin', {lease: {view_id: ids.view, target_id: ids.note, selectors: [makeTextSelector(0, scalarLength(PROTECTED_TEXT))], lease_epoch: 4, composition_active: true, draft_revision: ids.revision}}, makeEnvelope('edit.begin', undefined, NOTE_EXPECTED_REVISIONS));
               }}
               onCompositionEnd={onCompositionEnd}
               aria-describedby="editor-protection-description"

@@ -67,7 +67,7 @@ export function FocausPanel({adapter, viewId}: {adapter: HostAdapter; viewId: st
       estimate_basis: 'fixture：估计漏听范围，至少回看 5 分钟',
       actual_tier: 3,
     };
-    void adapter.invoke('catchup.request', payload, makeEnvelope('catchup.request'));
+    void adapter.invoke('catchup.request', payload, makeEnvelope('catchup.request', undefined, {[ids.view]: ids.revision, [ids.lesson]: ids.revision}));
     timeoutRef.current = window.setTimeout(() => {
       setResult({...fixtureFocausResult, request_generation: nextGeneration});
       setPending(false);
@@ -80,7 +80,7 @@ export function FocausPanel({adapter, viewId}: {adapter: HostAdapter; viewId: st
         body_revision_id: fixtureFocausResult.body_revision_id,
         elapsed_ms: completeElapsed,
         displayed_complete: true,
-      }, makeEnvelope('catchup.display_ack'));
+      }, makeEnvelope('catchup.display_ack', undefined, {[fixtureFocausResult.result_id]: fixtureFocausResult.body_revision_id}));
     }, 900);
   };
 
