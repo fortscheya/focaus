@@ -687,8 +687,6 @@ pub fn build_asr_result_submission_for_open(
     if candidate.task_id != open.task_id
         || candidate.snapshot_id != open.snapshot.snapshot_id
         || candidate.mapping_revision_id != open.mapping.mapping_revision_id
-        || candidate.remote_binding.provider != "bailian"
-        || candidate.remote_binding.local_request_segment_id != open.task_id
     {
         return Err(stale("asr_result_open_identity_mismatch"));
     }
