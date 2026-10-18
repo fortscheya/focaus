@@ -43,6 +43,48 @@ fn parse<T: DeserializeOwned>(v: &Value) -> Result<T> {
     serde_json::from_value(v.clone())
         .map_err(|_| error(ErrorCode::InvalidArgument, "Invalid command payload"))
 }
+fn unsupported_mutation_message(name: &str) -> Option<&'static str> {
+    match name {
+        "content.patch" | "content.undo" => {
+            Some("Native content mutation adapter is not connected")
+        }
+        "correction.draft"
+        | "correction.accept"
+        | "correction.reject"
+        | "correction.accept_batch" => {
+            Some("Native correction publication adapter is not connected")
+        }
+        "note.reorganize" | "note.add_selection" => {
+            Some("Native note mutation adapter is not connected")
+        }
+        "visualization.request" | "visualization.patch" | "visualization.retry" => {
+            Some("Native visualization mutation adapter is not connected")
+        }
+        "lesson.update"
+        | "recording.import"
+        | "recording.align"
+        | "language.select"
+        | "task.cancel"
+        | "task.retry"
+        | "proposal.apply"
+        | "view.maximize"
+        | "view.restore"
+        | "layout.resize"
+        | "material.import"
+        | "material.page_result"
+        | "material.reparse"
+        | "material.correct"
+        | "material.detach"
+        | "material.delete_confirm"
+        | "progress.calibrate"
+        | "qa.ask"
+        | "settings.update"
+        | "schedule.upsert"
+        | "package.export"
+        | "package.restore" => Some("Native mutation command is not connected"),
+        _ => None,
+    }
+}
 fn scope_allows(allowed: &[Scope], requested: &Scope) -> bool {
     allowed
         .iter()
@@ -172,6 +214,9 @@ impl NativeHost {
                 "Scoped window capability not yet granted for this command",
             ));
         }
+        if let Some(message) = unsupported_mutation_message(&name) {
+            return Err(error(ErrorCode::UnsupportedCapability, message));
+        }
         if entry["mutates"] == true && command.expected_revisions.is_none() {
             return Err(error(
                 ErrorCode::InvalidArgument,
@@ -206,6 +251,12 @@ impl NativeHost {
             "content.get" => self
                 .store
                 .read(|c| crate::library::get_content(c, &parse(&command.payload)?))?,
+            "source.resolve" => self
+                .store
+                .read(|c| crate::library::resolve_source(c, &parse(&command.payload)?))?,
+            "definition.resolve" => self
+                .store
+                .read(|c| crate::library::resolve_definition(c, &parse(&command.payload)?))?,
             "resource.read" => {
                 crate::library::resources::read_resource(&self.store, parse(&command.payload)?)?
             }
@@ -678,6 +729,9 @@ impl HostServices for NativeHost {
                 }
                 "task.checkpoint" => {
                     storage::value(&self.tasks.checkpoint(parse(&command.payload)?)?)?
+                }
+                "visualization.validate" => {
+                    storage::value(&self.visualizations.validate(parse(&command.payload)?)?)?
                 }
                 _ => {
                     return Err(error(

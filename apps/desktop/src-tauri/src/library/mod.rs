@@ -125,6 +125,236 @@ pub(crate) fn source_allowed(source: &SourceRef, snapshot: &InputSnapshot) -> bo
             && (matches!(allowed.selector, Selector::V4(_)) || allowed.selector == source.selector)
     })
 }
+
+fn source_edge_from_revision(
+    c: &Connection,
+    edge_id: &str,
+    from_entity_id: &str,
+    from_revision_id: &str,
+) -> Result<SourceEdge> {
+    let body: Option<String> = c
+        .query_row(
+            "SELECT body_json FROM revisions WHERE entity_id=?1 AND revision_id=?2",
+            params![from_entity_id, from_revision_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(sql_error)?
+        .flatten();
+    let body = body.ok_or_else(|| {
+        error(
+            ErrorCode::UnsupportedCapability,
+            "Source edge provenance is unavailable in the stored revision",
+        )
+    })?;
+    let body: Value = decode(&body)?;
+    let stored = body
+        .get("source_edges")
+        .and_then(Value::as_array)
+        .and_then(|edges| {
+            edges
+                .iter()
+                .find(|edge| edge.get("edge_id").and_then(Value::as_str) == Some(edge_id))
+        })
+        .ok_or_else(|| {
+            error(
+                ErrorCode::UnsupportedCapability,
+                "Source edge provenance is not stored with the source revision",
+            )
+        })?;
+    let edge: SourceEdge = serde_json::from_value(stored.clone()).map_err(|_| {
+        error(
+            ErrorCode::CorruptAsset,
+            "Stored source edge does not match the contract",
+        )
+    })?;
+    validate("SourceEdge", &storage::value(&edge)?)?;
+    if edge.edge_id != edge_id
+        || edge.from_entity_id != from_entity_id
+        || edge.from_revision_id != from_revision_id
+    {
+        return Err(error(
+            ErrorCode::CorruptAsset,
+            "Stored source edge identity does not match its revision",
+        ));
+    }
+    Ok(edge)
+}
+
+fn return_anchor_allowed(granted: &Selector, requested: &Selector) -> bool {
+    // The return anchor belongs to the source side of the edge. A whole source
+    // authorizes a concrete anchor in that source entity; narrower selectors
+    // must match exactly because the input carries no entity identity.
+    matches!(granted, Selector::V4(_)) || granted == requested
+}
+
+pub(crate) fn resolve_source(c: &Connection, input: &SourceResolveInput) -> Result<Value> {
+    let row: Option<(
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+    )> = c
+        .query_row(
+            "SELECT from_entity_id,from_revision_id,from_selector_json,to_entity_id,to_revision_id,to_ref_json,role,availability,freshness,snapshot_id FROM source_edges WHERE edge_id=?1",
+            [&input.edge_id],
+            |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                    r.get(6)?,
+                    r.get(7)?,
+                    r.get(8)?,
+                    r.get(9)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(sql_error)?;
+    let Some((
+        from_entity_id,
+        from_revision_id,
+        from_selector_json,
+        to_entity_id,
+        to_revision_id,
+        to_ref_json,
+        role,
+        availability,
+        freshness,
+        snapshot_id,
+    )) = row
+    else {
+        return Err(error(ErrorCode::NotFound, "Source edge unavailable"));
+    };
+    let from_selector: Selector = decode(&from_selector_json)?;
+    let to: SourceRef = decode(&to_ref_json)?;
+    if to.entity_id != to_entity_id || to.revision_id != to_revision_id {
+        return Err(error(
+            ErrorCode::CorruptAsset,
+            "Source edge target does not match its source reference",
+        ));
+    }
+    let mut edge =
+        source_edge_from_revision(c, &input.edge_id, &from_entity_id, &from_revision_id)?;
+    let projected_availability: SourceEdgeAvailability =
+        serde_json::from_value(Value::String(availability)).map_err(|_| {
+            error(
+                ErrorCode::CorruptAsset,
+                "Stored source edge availability is invalid",
+            )
+        })?;
+    let projected_freshness: SourceEdgeFreshness =
+        serde_json::from_value(Value::String(freshness)).map_err(|_| {
+            error(
+                ErrorCode::CorruptAsset,
+                "Stored source edge freshness is invalid",
+            )
+        })?;
+    if edge.from_selector != from_selector
+        || edge.to != to
+        || storage::value(&edge.role)?.as_str() != Some(role.as_str())
+        || edge.snapshot_id != snapshot_id
+    {
+        return Err(error(
+            ErrorCode::CorruptAsset,
+            "Stored source edge projection is inconsistent",
+        ));
+    }
+    // Availability and freshness are mutable projection state. Keep the
+    // immutable provenance from the revision, but return the current index
+    // status to the caller.
+    edge.availability = projected_availability;
+    edge.freshness = projected_freshness;
+    match edge.availability {
+        SourceEdgeAvailability::Available => check_source(c, &edge.to)?,
+        SourceEdgeAvailability::SourceDeleted => {
+            return Err(error(
+                ErrorCode::SourceDeleted,
+                "Resolved source was permanently deleted",
+            ));
+        }
+        SourceEdgeAvailability::SourceRemoved
+        | SourceEdgeAvailability::IntermediateUnavailable
+        | SourceEdgeAvailability::Unresolved => {
+            return Err(error(
+                ErrorCode::SourceUnavailable,
+                "Resolved source is unavailable",
+            ));
+        }
+    }
+    if !return_anchor_allowed(&edge.from_selector, &input.return_anchor) {
+        return Err(error(
+            ErrorCode::PermissionDenied,
+            "Return anchor is outside the resolved source",
+        ));
+    }
+    Ok(json!({
+        "edge": storage::value(&edge)?,
+        "resolved_source": storage::value(&edge.to)?,
+        "return_anchor": storage::value(&input.return_anchor)?,
+        "traversed_edges": [edge.edge_id],
+        "skipped_layers": [],
+    }))
+}
+
+pub(crate) fn resolve_definition(
+    c: &Connection,
+    input: &DefinitionResolveInput,
+) -> Result<Value> {
+    let row: Option<(String, String, String)> = c
+        .query_row(
+            "SELECT d.scope_id,d.body_json,e.lifecycle FROM definitions d JOIN entities e ON e.entity_id=d.definition_id WHERE d.definition_id=?1",
+            [&input.definition_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()
+        .map_err(sql_error)?;
+    let Some((stored_scope, body, lifecycle)) = row else {
+        return Err(error(ErrorCode::NotFound, "Definition unavailable"));
+    };
+    if lifecycle == "deleted" {
+        return Err(error(
+            ErrorCode::SourceDeleted,
+            "Definition permanently deleted",
+        ));
+    }
+    if lifecycle != "active" {
+        return Err(error(ErrorCode::SourceUnavailable, "Definition unavailable"));
+    }
+    if stored_scope != input.scope_id {
+        return Err(error(
+            ErrorCode::PermissionDenied,
+            "Definition is outside the requested scope",
+        ));
+    }
+    let definition: Definition = decode(&body)?;
+    if definition.definition_id != input.definition_id || definition.scope_id != stored_scope {
+        return Err(error(
+            ErrorCode::CorruptAsset,
+            "Stored definition identity does not match its index",
+        ));
+    }
+    validate("Definition", &storage::value(&definition)?)?;
+    check_source(c, &definition.valid_from_anchor)?;
+    if let Some(anchor) = &definition.valid_to_anchor {
+        check_source(c, anchor)?;
+    }
+    for source in &definition.source_refs {
+        check_source(c, source)?;
+    }
+    storage::value(&definition)
+}
+
 pub(crate) fn reserve_identity(t: &Transaction<'_>, input: &IdentityReserveInput) -> Result<Value> {
     if input.candidate_keys.len() > 4096 || input.entity_type.len() > 64 {
         return Err(error(
@@ -539,4 +769,343 @@ pub(crate) fn end_edit(t: &Transaction<'_>, input: &EditEndInput) -> Result<Valu
         }
     }
     Ok(json!({"released":input.draft_revision.is_none()}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::{commit_version, Store};
+    use std::path::PathBuf;
+
+    struct TestStore {
+        path: PathBuf,
+        store: Store,
+    }
+
+    impl TestStore {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "focaus-library-{}",
+                storage::id()
+            ));
+            let store = Store::open(&path, crate::INITIAL_MIGRATION).expect("test database");
+            Self { path, store }
+        }
+    }
+
+    impl Drop for TestStore {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
+    fn lesson(store: &Store) -> String {
+        store
+            .write(|t| {
+                let course = create_course(
+                    t,
+                    &CourseCreateInput {
+                        name: "library resolver test".into(),
+                    },
+                    None,
+                )?;
+                let lesson = create_lesson(
+                    t,
+                    &LessonCreateInput {
+                        course_id: course["course_id"].as_str().unwrap().into(),
+                        title: "resolver".into(),
+                        actual_date: None,
+                        timezone: "Asia/Shanghai".into(),
+                    },
+                    None,
+                )?;
+                Ok(lesson["lesson_id"].as_str().unwrap().to_owned())
+            })
+            .unwrap()
+    }
+
+    fn source_entity(t: &Transaction<'_>) -> Result<SourceRef> {
+        let entity_id = storage::id();
+        let body = commit_entity(
+            t,
+            &entity_id,
+            "note",
+            json!({"entity_id":entity_id}),
+            "content.committed",
+            json!({"kind":"global"}),
+            None,
+            None,
+        )?;
+        let revision_id = body
+            .get("revision_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .or_else(|| {
+                t.query_row(
+                    "SELECT revision_id FROM entities WHERE entity_id=?1",
+                    [&entity_id],
+                    |r| r.get(0),
+                )
+                .ok()
+            })
+            .ok_or_else(|| {
+                error(
+                    ErrorCode::InvalidResult,
+                    "Test source revision unavailable",
+                )
+            })?;
+        let content_hash: String = t
+            .query_row(
+                "SELECT content_hash FROM revisions WHERE revision_id=?1",
+                [&revision_id],
+                |r| r.get(0),
+            )
+            .map_err(sql_error)?;
+        Ok(SourceRef {
+            entity_id,
+            revision_id,
+            content_hash,
+            selector: Selector::V4(WholeSelector {
+                kind: "whole".into(),
+            }),
+        })
+    }
+
+    #[test]
+    fn definition_resolve_checks_scope_and_source_revision() {
+        let db = TestStore::new();
+        let lesson_id = lesson(&db.store);
+        let (definition_id, scope_id, definition) = db
+            .store
+            .write(|t| {
+                let source = source_entity(t)?;
+                let definition_id = storage::id();
+                let scope_id = storage::id();
+                let definition = Definition {
+                    definition_id: definition_id.clone(),
+                    concept_id: storage::id(),
+                    lesson_id: lesson_id.clone(),
+                    scope_id: scope_id.clone(),
+                    valid_from_anchor: source.clone(),
+                    valid_to_anchor: None,
+                    source_refs: vec![source],
+                    definition_fact_ids: Vec::new(),
+                };
+                commit_entity(
+                    t,
+                    &definition_id,
+                    "definition",
+                    storage::value(&definition)?,
+                    "content.committed",
+                    json!({"kind":"lesson","lesson_id":lesson_id}),
+                    None,
+                    None,
+                )?;
+                t.execute(
+                    "INSERT INTO definitions VALUES(?1,?2,?3,?4,?5)",
+                    params![
+                        definition_id,
+                        definition.concept_id,
+                        definition.lesson_id,
+                        definition.scope_id,
+                        storage::encode(&definition)?
+                    ],
+                )
+                .map_err(sql_error)?;
+                Ok((definition.definition_id.clone(), scope_id, definition))
+            })
+            .unwrap();
+
+        let resolved = db
+            .store
+            .read(|c| {
+                resolve_definition(
+                    c,
+                    &DefinitionResolveInput {
+                        definition_id: definition_id.clone(),
+                        visible_tier: 3,
+                        scope_id: scope_id.clone(),
+                    },
+                )
+            })
+            .unwrap();
+        assert_eq!(
+            serde_json::from_value::<Definition>(resolved).unwrap(),
+            definition
+        );
+
+        let wrong_scope = db
+            .store
+            .read(|c| {
+                resolve_definition(
+                    c,
+                    &DefinitionResolveInput {
+                        definition_id: definition_id.clone(),
+                        visible_tier: 3,
+                        scope_id: storage::id(),
+                    },
+                )
+            })
+            .unwrap_err();
+        assert_eq!(wrong_scope.code, ErrorCode::PermissionDenied);
+
+        let mut stale = definition.clone();
+        stale.valid_from_anchor.content_hash = "0".repeat(64);
+        stale.source_refs[0].content_hash = "0".repeat(64);
+        db.store
+            .write(|t| {
+                t.execute(
+                    "UPDATE definitions SET body_json=?2 WHERE definition_id=?1",
+                    params![stale.definition_id, storage::encode(&stale)?],
+                )
+                .map_err(sql_error)?;
+                Ok(())
+            })
+            .unwrap();
+        let stale_error = db
+            .store
+            .read(|c| {
+                resolve_definition(
+                    c,
+                    &DefinitionResolveInput {
+                        definition_id: definition_id.clone(),
+                        visible_tier: 3,
+                        scope_id: scope_id.clone(),
+                    },
+                )
+            })
+            .unwrap_err();
+        assert_eq!(stale_error.code, ErrorCode::StaleInput);
+
+        let missing = db
+            .store
+            .read(|c| {
+                resolve_definition(
+                    c,
+                    &DefinitionResolveInput {
+                        definition_id: storage::id(),
+                        visible_tier: 3,
+                        scope_id,
+                    },
+                )
+            })
+            .unwrap_err();
+        assert_eq!(missing.code, ErrorCode::NotFound);
+    }
+
+    #[test]
+    fn source_resolve_uses_revision_provenance_and_projection_status() {
+        let db = TestStore::new();
+        let missing = db
+            .store
+            .read(|c| {
+                resolve_source(
+                    c,
+                    &SourceResolveInput {
+                        edge_id: storage::id(),
+                        return_anchor: Selector::V4(WholeSelector {
+                            kind: "whole".into(),
+                        }),
+                    },
+                )
+            })
+            .unwrap_err();
+        assert_eq!(missing.code, ErrorCode::NotFound);
+
+        let (edge_id, target, from_selector) = db
+            .store
+            .write(|t| {
+                let from_entity_id = storage::id();
+                let from_revision_id = storage::id();
+                let target = source_entity(t)?;
+                let edge_id = storage::id();
+                let from_selector = Selector::V4(WholeSelector {
+                    kind: "whole".into(),
+                });
+                let edge = SourceEdge {
+                    edge_id: edge_id.clone(),
+                    from_entity_id: from_entity_id.clone(),
+                    from_revision_id: from_revision_id.clone(),
+                    from_selector: from_selector.clone(),
+                    to: target.clone(),
+                    role: SourceEdgeRole::TeacherSaid,
+                    created_by: SourceEdgeCreatedBy::Engine,
+                    snapshot_id: storage::id(),
+                    availability: SourceEdgeAvailability::Available,
+                    freshness: SourceEdgeFreshness::Current,
+                };
+                commit_version(
+                    t,
+                    &from_entity_id,
+                    "fact",
+                    &from_revision_id,
+                    json!({
+                        "entity_id":from_entity_id,
+                        "revision_id":from_revision_id,
+                        "source_edges":[edge]
+                    }),
+                    "content.committed",
+                    json!({"kind":"global"}),
+                    None,
+                    None,
+                )?;
+                t.execute(
+                    "INSERT INTO source_edges VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+                    params![
+                        edge.edge_id,
+                        edge.from_entity_id,
+                        edge.from_revision_id,
+                        storage::encode(&edge.from_selector)?,
+                        edge.to.entity_id,
+                        edge.to.revision_id,
+                        storage::encode(&edge.to)?,
+                        storage::value(&edge.role)?.as_str().unwrap(),
+                        storage::value(&edge.availability)?.as_str().unwrap(),
+                        storage::value(&edge.freshness)?.as_str().unwrap(),
+                        edge.snapshot_id
+                    ],
+                )
+                .map_err(sql_error)?;
+                Ok((edge_id, target, from_selector))
+            })
+            .unwrap();
+        let resolved = db
+            .store
+            .read(|c| {
+                resolve_source(
+                    c,
+                    &SourceResolveInput {
+                        edge_id: edge_id.clone(),
+                        return_anchor: from_selector.clone(),
+                    },
+                )
+            })
+            .unwrap();
+        assert_eq!(resolved["resolved_source"]["entity_id"], target.entity_id);
+        assert_eq!(resolved["edge"]["freshness"], "current");
+
+        db.store
+            .write(|t| {
+                t.execute(
+                    "UPDATE source_edges SET freshness='update_available' WHERE edge_id=?1",
+                    [&edge_id],
+                )
+                .map_err(sql_error)?;
+                Ok(())
+            })
+            .unwrap();
+        let projected = db
+            .store
+            .read(|c| {
+                resolve_source(
+                    c,
+                    &SourceResolveInput {
+                        edge_id,
+                        return_anchor: from_selector,
+                    },
+                )
+            })
+            .unwrap();
+        assert_eq!(projected["edge"]["freshness"], "update_available");
+    }
 }
