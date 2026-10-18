@@ -14,3 +14,8 @@ jsonschema = { version = "0.33", default-features = false }
 sha2 = "0.10"
 serde_json_canonicalizer = "0.3"
 focaus-contracts = { path = "crates/focaus-contracts" }
+
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net", "sync"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
+futures-util = "0.3"
