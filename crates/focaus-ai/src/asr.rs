@@ -107,6 +107,9 @@ fn validate_mapping(mapping: &TimeMapping) -> Result<(), SafeError> {
 /// separate mappings and are never silently filled.
 pub fn map_relative_ms(mapping: &TimeMapping, relative_ms: u64) -> Result<u64, SafeError> {
     validate_mapping(mapping)?;
+    if mapping.segments.iter().any(|segment| segment.scale_num != segment.scale_den) {
+        return Err(invalid_argument("sample_rate_required_for_non_identity_time_mapping"));
+    }
     let mut remaining = relative_ms;
     for segment in &mapping.segments {
         let duration = segment.timeline.end_ms - segment.timeline.start_ms;
@@ -141,6 +144,9 @@ pub fn map_relative_interval(
 
 fn map_relative_end_ms(mapping: &TimeMapping, relative_ms: u64) -> Result<u64, SafeError> {
     validate_mapping(mapping)?;
+    if mapping.segments.iter().any(|segment| segment.scale_num != segment.scale_den) {
+        return Err(invalid_argument("sample_rate_required_for_non_identity_time_mapping"));
+    }
     let mut remaining = relative_ms;
     for segment in &mapping.segments {
         let duration = segment.timeline.end_ms - segment.timeline.start_ms;
@@ -752,8 +758,13 @@ mod tests {
             focaus_contracts::MappingSegment { derived_frames: FrameRange { start_frame: 0, end_frame: 100 }, original_asset_id: "a".into(), original_track_id: "t".into(), original_frames: FrameRange { start_frame: 0, end_frame: 100 }, timeline: TimelineRange { start_ms: 0, end_ms: 1000 }, scale_num: 1, scale_den: 1, delay_frames: 0, max_error_ms: 0.0 },
             focaus_contracts::MappingSegment { derived_frames: FrameRange { start_frame: 100, end_frame: 200 }, original_asset_id: "a".into(), original_track_id: "t".into(), original_frames: FrameRange { start_frame: 100, end_frame: 200 }, timeline: TimelineRange { start_ms: 2000, end_ms: 3000 }, scale_num: 1, scale_den: 1, delay_frames: 0, max_error_ms: 0.0 },
         ] };
+        assert_eq!(map_relative_interval(&two_spans, 0, 1000).unwrap(), TimelineRange { start_ms: 0, end_ms: 1000 });
         assert_eq!(map_relative_interval(&two_spans, 1000, 2000).unwrap(), TimelineRange { start_ms: 2000, end_ms: 3000 });
+        assert_eq!(map_relative_interval(&two_spans, 1000, 1001).unwrap(), TimelineRange { start_ms: 2000, end_ms: 2001 });
         assert_eq!(map_relative_interval_with_sample_rate(&two_spans, 0, 1000, 100).unwrap(), TimelineRange { start_ms: 0, end_ms: 1000 });
+        let scaled = TimeMapping { mapping_revision_id: "scaled".into(), derived_asset_id: "a".into(), segments: vec![focaus_contracts::MappingSegment { derived_frames: FrameRange { start_frame: 0, end_frame: 100 }, original_asset_id: "a".into(), original_track_id: "t".into(), original_frames: FrameRange { start_frame: 0, end_frame: 200 }, timeline: TimelineRange { start_ms: 0, end_ms: 1000 }, scale_num: 2, scale_den: 1, delay_frames: 0, max_error_ms: 0.0 }] };
+        assert!(map_relative_interval(&scaled, 0, 1000).is_err());
+        assert_eq!(map_relative_interval_with_sample_rate(&scaled, 0, 1000, 100).unwrap(), TimelineRange { start_ms: 0, end_ms: 1000 });
         let body = build_stream_run_task(&open(), "remote").unwrap();
         assert_eq!(body["payload"]["model"], STREAMING_MODEL_ID);
         assert!(body.to_string().find("credential").is_none());

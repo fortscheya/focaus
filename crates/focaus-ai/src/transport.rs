@@ -7,13 +7,25 @@
 
 use crate::{binding_matches, invalid_argument, task_error};
 use focaus_contracts::{CredentialBinding, ErrorCode, ModelId, SafeError};
-use reqwest::{Client, StatusCode};
+use futures_util::StreamExt;
+use reqwest::{redirect::Policy, Client, StatusCode, Url};
 use serde_json::Value;
 use std::sync::Arc;
-use tokio_tungstenite::{connect_async, tungstenite::http::Request, MaybeTlsStream, WebSocketStream};
+use tokio_tungstenite::{
+    connect_async,
+    tungstenite::{
+        client::IntoClientRequest,
+        http::{header, HeaderValue, Request},
+    },
+    MaybeTlsStream, WebSocketStream,
+};
 use tokio::net::TcpStream;
+use std::time::Duration;
 
 pub type ProviderWebSocket = WebSocketStream<MaybeTlsStream<TcpStream>>;
+pub const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
+pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// A host-owned capability.  The returned value is consumed immediately by a
 /// transport request and is never placed in a task, snapshot, diagnostic or
@@ -28,18 +40,64 @@ pub struct JsonResponse {
     pub body: Value,
 }
 
+/// A host-approved endpoint set for one exact model/credential binding.  The
+/// path prefixes are explicit so a redirect or arbitrary URL cannot silently
+/// move audio or credentials to another service.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EndpointPolicy {
+    pub binding: CredentialBinding,
+    pub http_origin: String,
+    pub http_path_prefix: String,
+    pub websocket_origin: String,
+    pub websocket_path_prefix: String,
+}
+
+impl EndpointPolicy {
+    pub fn new(
+        binding: CredentialBinding,
+        http_origin: impl Into<String>,
+        http_path_prefix: impl Into<String>,
+        websocket_origin: impl Into<String>,
+        websocket_path_prefix: impl Into<String>,
+    ) -> Result<Self, SafeError> {
+        validate_binding(&binding)?;
+        let policy = Self {
+            binding,
+            http_origin: http_origin.into(),
+            http_path_prefix: http_path_prefix.into(),
+            websocket_origin: websocket_origin.into(),
+            websocket_path_prefix: websocket_path_prefix.into(),
+        };
+        validate_base_origin(&policy.http_origin, "https")?;
+        validate_base_origin(&policy.websocket_origin, "wss")?;
+        validate_path_prefix(&policy.http_path_prefix)?;
+        validate_path_prefix(&policy.websocket_path_prefix)?;
+        Ok(policy)
+    }
+}
+
 #[derive(Clone)]
 pub struct ReqwestTransport<C> {
     client: Client,
     credentials: Arc<C>,
+    policy: EndpointPolicy,
 }
 
 impl<C> ReqwestTransport<C>
 where
     C: CredentialCapability + 'static,
 {
-    pub fn new(client: Client, credentials: Arc<C>) -> Self {
-        Self { client, credentials }
+    /// Build the production transport with bounded connection/response
+    /// behavior and redirects disabled.  Tests can still use the pure request
+    /// builders without constructing this client.
+    pub fn new(credentials: Arc<C>, policy: EndpointPolicy) -> Result<Self, SafeError> {
+        let client = Client::builder()
+            .connect_timeout(CONNECT_TIMEOUT)
+            .timeout(REQUEST_TIMEOUT)
+            .redirect(Policy::none())
+            .build()
+            .map_err(|_| task_error(ErrorCode::ProviderError, "provider_client_init_failed", false))?;
+        Ok(Self { client, credentials, policy })
     }
 
     pub async fn post_json(
@@ -48,8 +106,7 @@ where
         binding: &CredentialBinding,
         body: Value,
     ) -> Result<JsonResponse, SafeError> {
-        validate_endpoint(endpoint)?;
-        validate_binding(binding)?;
+        validate_http_endpoint(endpoint, binding, &self.policy)?;
         let token = self.credentials.bearer_token(binding)?;
         let response = self.client.post(endpoint).bearer_auth(token).json(&body).send().await
             .map_err(|_| task_error(ErrorCode::NetworkUnavailable, "provider_network_unavailable", true))?;
@@ -61,8 +118,7 @@ where
         endpoint: &str,
         binding: &CredentialBinding,
     ) -> Result<JsonResponse, SafeError> {
-        validate_endpoint(endpoint)?;
-        validate_binding(binding)?;
+        validate_http_endpoint(endpoint, binding, &self.policy)?;
         let token = self.credentials.bearer_token(binding)?;
         let response = self.client.get(endpoint).bearer_auth(token).send().await
             .map_err(|_| task_error(ErrorCode::NetworkUnavailable, "provider_network_unavailable", true))?;
@@ -77,15 +133,9 @@ where
         endpoint: &str,
         binding: &CredentialBinding,
     ) -> Result<ProviderWebSocket, SafeError> {
-        validate_ws_endpoint(endpoint)?;
-        validate_binding(binding)?;
+        validate_ws_endpoint(endpoint, binding, &self.policy)?;
         let token = self.credentials.bearer_token(binding)?;
-        let request = Request::builder()
-            .uri(endpoint)
-            .header("Authorization", format!("Bearer {token}"))
-            .header("User-Agent", "focaus-ai/contract-2.0")
-            .body(())
-            .map_err(|_| invalid_argument("invalid_stream_endpoint"))?;
+        let request = build_ws_request(endpoint, binding, &self.policy, &token)?;
         let (socket, _) = connect_async(request)
             .await
             .map_err(|_| task_error(ErrorCode::NetworkUnavailable, "provider_stream_unavailable", true))?;
@@ -94,7 +144,7 @@ where
 }
 
 fn validate_binding(binding: &CredentialBinding) -> Result<(), SafeError> {
-    let expected = match binding.model_id {
+    let expected = match binding.model_id.clone() {
         ModelId::QwenAudio31AsrFlashStreaming => ModelId::QwenAudio31AsrFlashStreaming,
         ModelId::QwenAudio31AsrFlashFiletrans => ModelId::QwenAudio31AsrFlashFiletrans,
         ModelId::DecisionModelPreview => ModelId::DecisionModelPreview,
@@ -104,32 +154,110 @@ fn validate_binding(binding: &CredentialBinding) -> Result<(), SafeError> {
 }
 
 fn validate_endpoint(endpoint: &str) -> Result<(), SafeError> {
-    if !endpoint.starts_with("https://") || endpoint.contains('@') {
+    let parsed = Url::parse(endpoint).map_err(|_| invalid_argument("provider_endpoint_invalid"))?;
+    if parsed.scheme() != "https" || parsed.host_str().is_none() || parsed.username() != "" || parsed.password().is_some() || parsed.fragment().is_some() {
         return Err(invalid_argument("provider_endpoint_must_be_https_without_userinfo"));
     }
     Ok(())
 }
 
-fn validate_ws_endpoint(endpoint: &str) -> Result<(), SafeError> {
-    if !(endpoint.starts_with("wss://") || endpoint.starts_with("https://")) || endpoint.contains('@') {
+fn validate_ws_endpoint(endpoint: &str, binding: &CredentialBinding, policy: &EndpointPolicy) -> Result<(), SafeError> {
+    validate_binding(binding)?;
+    if &policy.binding != binding {
+        return Err(invalid_argument("endpoint_binding_mismatch"));
+    }
+    let parsed = Url::parse(endpoint).map_err(|_| invalid_argument("provider_stream_endpoint_invalid"))?;
+    if parsed.scheme() != "wss" || parsed.host_str().is_none() || parsed.username() != "" || parsed.password().is_some() || parsed.fragment().is_some() || !origin_matches(&parsed, &policy.websocket_origin) || !parsed.path().starts_with(&policy.websocket_path_prefix) {
         return Err(invalid_argument("provider_stream_endpoint_must_be_tls_without_userinfo"));
     }
     Ok(())
 }
 
+fn validate_base_origin(origin: &str, expected_scheme: &str) -> Result<(), SafeError> {
+    let parsed = Url::parse(origin).map_err(|_| invalid_argument("endpoint_policy_origin_invalid"))?;
+    if parsed.scheme() != expected_scheme || parsed.host_str().is_none() || parsed.username() != "" || parsed.password().is_some() || parsed.query().is_some() || parsed.fragment().is_some() {
+        return Err(invalid_argument("endpoint_policy_origin_invalid"));
+    }
+    Ok(())
+}
+
+fn validate_path_prefix(prefix: &str) -> Result<(), SafeError> {
+    if !prefix.starts_with('/') || prefix.contains("..") {
+        return Err(invalid_argument("endpoint_policy_path_invalid"));
+    }
+    Ok(())
+}
+
+fn origin_matches(url: &Url, expected_origin: &str) -> bool {
+    let Ok(expected) = Url::parse(expected_origin) else { return false };
+    url.scheme() == expected.scheme()
+        && url.host_str() == expected.host_str()
+        && url.port_or_known_default() == expected.port_or_known_default()
+}
+
+fn validate_http_endpoint(endpoint: &str, binding: &CredentialBinding, policy: &EndpointPolicy) -> Result<(), SafeError> {
+    validate_binding(binding)?;
+    if &policy.binding != binding {
+        return Err(invalid_argument("endpoint_binding_mismatch"));
+    }
+    let parsed = Url::parse(endpoint).map_err(|_| invalid_argument("provider_endpoint_invalid"))?;
+    if parsed.scheme() != "https" || parsed.host_str().is_none() || parsed.username() != "" || parsed.password().is_some() || parsed.fragment().is_some() || !origin_matches(&parsed, &policy.http_origin) || !parsed.path().starts_with(&policy.http_path_prefix) {
+        return Err(invalid_argument("provider_endpoint_not_in_allowlist"));
+    }
+    Ok(())
+}
+
+/// Build a standards-compliant WebSocket client request.  `IntoClientRequest`
+/// supplies the GET/Upgrade/Connection/Sec-WebSocket headers; only the
+/// host-injected Authorization and a product user agent are added here.
+pub fn build_ws_request(
+    endpoint: &str,
+    binding: &CredentialBinding,
+    policy: &EndpointPolicy,
+    token: &str,
+) -> Result<Request<()>, SafeError> {
+    validate_ws_endpoint(endpoint, binding, policy)?;
+    if token.is_empty() {
+        return Err(task_error(ErrorCode::AuthRequired, "provider_auth_required", false));
+    }
+    let mut request = endpoint.into_client_request().map_err(|_| invalid_argument("invalid_stream_endpoint"))?;
+    let value = HeaderValue::from_str(&format!("Bearer {token}"))
+        .map_err(|_| invalid_argument("provider_auth_header_invalid"))?;
+    request.headers_mut().insert(header::AUTHORIZATION, value);
+    request.headers_mut().insert(header::USER_AGENT, HeaderValue::from_static("focaus-ai/contract-2.0"));
+    Ok(request.map(|_| ()))
+}
+
 async fn decode_response(response: reqwest::Response) -> Result<JsonResponse, SafeError> {
     let status = response.status();
-    let body = response.json::<Value>().await.map_err(|_| task_error(ErrorCode::ProviderError, "provider_invalid_json_response", status.is_server_error()))?;
-    if status.is_success() {
-        return Ok(JsonResponse { status: status.as_u16(), body });
+    if !status.is_success() {
+        let (code, retryable, message) = status_error(status);
+        return Err(task_error(code, message, retryable));
     }
-    let (code, retryable, message) = match status {
+    if response.content_length().is_some_and(|size| size > MAX_RESPONSE_BYTES as u64) {
+        return Err(task_error(ErrorCode::ProviderError, "provider_response_too_large", false));
+    }
+    let mut stream = response.bytes_stream();
+    let mut bytes = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|_| task_error(ErrorCode::NetworkUnavailable, "provider_response_read_failed", true))?;
+        if bytes.len().saturating_add(chunk.len()) > MAX_RESPONSE_BYTES {
+            return Err(task_error(ErrorCode::ProviderError, "provider_response_too_large", false));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    let body = serde_json::from_slice::<Value>(&bytes)
+        .map_err(|_| task_error(ErrorCode::ProviderError, "provider_invalid_json_response", false))?;
+    Ok(JsonResponse { status: status.as_u16(), body })
+}
+
+fn status_error(status: StatusCode) -> (ErrorCode, bool, &'static str) {
+    match status {
         StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => (ErrorCode::AuthRequired, false, "provider_auth_required"),
         StatusCode::TOO_MANY_REQUESTS => (ErrorCode::RateLimited, true, "provider_rate_limited"),
         value if value.is_server_error() => (ErrorCode::ProviderError, true, "provider_server_error"),
         _ => (ErrorCode::ProviderError, false, "provider_request_failed"),
-    };
-    Err(task_error(code, message, retryable))
+    }
 }
 
 /// Parse only the stable remote task ID.  The local task ID remains supplied
@@ -169,6 +297,20 @@ mod tests {
         assert!(validate_endpoint("http://example.invalid").is_err());
         assert!(ensure_model_endpoint(ModelId::QwenAudio31AsrFlashFiletrans, "https://api.example/filetrans").is_ok());
         assert!(ensure_model_endpoint(ModelId::QwenAudio31AsrFlashFiletrans, "https://api.example/stream").is_err());
+    }
+
+    #[test]
+    fn endpoint_policy_binds_host_path_and_ws_upgrade_headers() {
+        let binding = binding_for_model(ModelId::QwenAudio31AsrFlashStreaming);
+        let policy = EndpointPolicy::new(binding.clone(), "https://beijing.example", "/v1/", "wss://beijing.example", "/v1/").unwrap();
+        let request = build_ws_request("wss://beijing.example/v1/asr", &binding, &policy, "fixture-token").unwrap();
+        assert_eq!(request.method(), "GET");
+        assert!(request.headers().contains_key("upgrade"));
+        assert_eq!(request.headers().get("authorization").unwrap(), "Bearer fixture-token");
+        assert!(build_ws_request("wss://other.example/v1/asr", &binding, &policy, "fixture-token").is_err());
+        assert!(build_ws_request("wss://beijing.example/other", &binding, &policy, "fixture-token").is_err());
+        assert_eq!(status_error(StatusCode::UNAUTHORIZED).0, ErrorCode::AuthRequired);
+        assert_eq!(status_error(StatusCode::TOO_MANY_REQUESTS).0, ErrorCode::RateLimited);
     }
 
     #[test]
