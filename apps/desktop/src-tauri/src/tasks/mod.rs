@@ -260,6 +260,118 @@ impl TaskManager {
             Ok(updated)
         })
     }
+    /// Material sidecar checkpoints are monotonic within one task attempt. The
+    /// material bridge stores its next publication sequence and head revision
+    /// under `material_bridge`; this guard keeps an old page/checkpoint from
+    /// replacing a newer staged progress record without changing the public
+    /// contract schema.
+    pub fn checkpoint_material(&self, input: TaskCheckpointInput) -> Result<Task> {
+        reject_sensitive_metadata(&storage::value(&input.safe_state)?)?;
+        self.store.write(|t| {
+            let current = task(t, &input.task_id)?;
+            if current.attempt != input.attempt
+                || terminal(&current.state)
+                || current.state == TaskState::CancelRequested
+            {
+                return Err(error(
+                    ErrorCode::StaleInput,
+                    "Checkpoint attempt no longer active",
+                ));
+            }
+            let requested = input
+                .safe_state
+                .get("material_bridge")
+                .and_then(Value::as_object)
+                .ok_or_else(|| {
+                    error(
+                        ErrorCode::InvalidResult,
+                        "Material checkpoint bridge state is missing",
+                    )
+                })?;
+            let requested_state = requested
+                .get("state")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    error(
+                        ErrorCode::InvalidResult,
+                        "Material checkpoint state is missing",
+                    )
+                })?;
+            let requested_next = requested
+                .get("next_publication_sequence")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| {
+                    error(
+                        ErrorCode::InvalidResult,
+                        "Material checkpoint sequence is missing",
+                    )
+                })?;
+            if !matches!(requested_state, "running" | "completed") {
+                return Err(error(
+                    ErrorCode::InvalidResult,
+                    "Material checkpoint state is invalid",
+                ));
+            }
+            let current_bridge = current
+                .checkpoint
+                .get("material_bridge")
+                .and_then(Value::as_object);
+            let current_state = current_bridge
+                .and_then(|bridge| bridge.get("state"))
+                .and_then(Value::as_str);
+            let current_next = current_bridge
+                .and_then(|bridge| bridge.get("next_publication_sequence"))
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let current_head = current_bridge
+                .and_then(|bridge| bridge.get("head_parse_version_id"));
+            let requested_head = requested.get("head_parse_version_id");
+            match (current_state, requested_state) {
+                (Some("completed"), "completed")
+                    if requested_next == current_next && requested_head == current_head => {}
+                (Some("completed"), _) => {
+                    return Err(error(
+                        ErrorCode::StaleInput,
+                        "Material checkpoint is older than completed progress",
+                    ));
+                }
+                (_, "running") => {
+                    if requested_next < current_next || requested_next > current_next + 1 {
+                        return Err(error(
+                            ErrorCode::StaleInput,
+                            "Material checkpoint sequence changed",
+                        ));
+                    }
+                    if requested_next == current_next
+                        && current_head.is_some()
+                        && requested_head != current_head
+                    {
+                        return Err(error(
+                            ErrorCode::StaleInput,
+                            "Material checkpoint head changed",
+                        ));
+                    }
+                }
+                (_, "completed") if requested_next != current_next + 1 => {
+                    return Err(error(
+                        ErrorCode::StaleInput,
+                        "Material completion checkpoint sequence changed",
+                    ));
+                }
+                _ => {}
+            }
+            let mut checkpoint = input.safe_state.clone();
+            checkpoint.insert("cursor".into(), json!(input.cursor));
+            t.execute(
+                "UPDATE tasks SET checkpoint_json=?2,updated_at=?3 WHERE task_id=?1",
+                params![input.task_id, encode(&checkpoint)?, storage::now()],
+            )
+            .map_err(sql_error)?;
+            let updated = task(t, &input.task_id)?;
+            task_event(t, &updated)?;
+            Ok(updated)
+        })
+    }
     pub fn bind_remote(&self, id: &str, attempt: u64, binding: &RemoteBinding) -> Result<()> {
         self.store.write(|t| {
             let current = task(t, id)?;

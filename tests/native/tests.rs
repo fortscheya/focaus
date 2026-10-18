@@ -1546,7 +1546,75 @@ fn native_material_acceptance_publishes_local_manifest_and_rejects_stale_inputs(
         ),
     };
     validate("MaterialManifest", &json!(input.manifest)).unwrap();
-    let committed = host.accept_material_result(input.clone()).unwrap();
+    let transient_parse = storage::id();
+    let mut page_manifest = input.manifest.clone();
+    page_manifest.parse_version_id = transient_parse.clone();
+    page_manifest.parent_parse_version_id = None;
+    let page_progress = json!({
+        "contract_version":"2.0.0",
+        "task_id":job.task.task_id,
+        "material_id":job.material_id,
+        "parse_version_id":job.parse_version_id,
+        "parent_parse_version_id":null,
+        "publication_parse_version_id":transient_parse,
+        "publication_parent_parse_version_id":null,
+        "source_version_id":job.source_version_id,
+        "head_parse_version_id":page_manifest.parse_version_id,
+        "published_parse_versions":[page_manifest.parse_version_id],
+        "next_publication_sequence":1,
+        "source_hash":source.content_hash,
+        "profile":"light",
+        "requested_pages":[0],
+        "completed_pages":[0],
+        "failed_pages":[],
+        "state":"running"
+    });
+    let page_payload = json!({
+        "format":"focaus.material",
+        "format_version":"2.0.0",
+        "material_id":job.material_id,
+        "source_version_id":job.source_version_id,
+        "source_hash":source.content_hash,
+        "parse_version_id":page_manifest.parse_version_id,
+        "snapshot_parse_version_id":page_manifest.parse_version_id,
+        "publication_sequence":0,
+        "manifest":page_manifest,
+        "page":input.manifest.pages[0],
+        "progress":page_progress
+    });
+    let staged = host
+        .accept_material_page_result(&job.task.task_id, &job.task.snapshot_id, &page_payload)
+        .unwrap();
+    assert_eq!(staged["accepted"], true);
+    assert_eq!(staged["duplicate"], false);
+    assert_eq!(
+        db.store
+            .read(|c| c.query_row("SELECT COUNT(*) FROM parse_versions", [], |r| r.get::<_, u64>(0)).map_err(storage::sql_error))
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        host.accept_material_page_result(&job.task.task_id, &job.task.snapshot_id, &page_payload)
+            .unwrap()["duplicate"],
+        true
+    );
+    host.record_material_checkpoint(&job.task.task_id, 1, &page_progress)
+        .unwrap();
+    let mut completed_progress = page_progress.clone();
+    completed_progress["publication_parse_version_id"] = json!(job.parse_version_id);
+    completed_progress["head_parse_version_id"] = json!(job.parse_version_id);
+    completed_progress["published_parse_versions"] =
+        json!([transient_parse, job.parse_version_id]);
+    completed_progress["next_publication_sequence"] = json!(2);
+    completed_progress["state"] = json!("completed");
+    host.record_material_checkpoint(&job.task.task_id, 1, &completed_progress)
+        .unwrap();
+    let committed = host
+        .accept_material_completed(
+            input.clone(),
+            &json!({"manifest":input.manifest,"progress":completed_progress}),
+        )
+        .unwrap();
     assert_eq!(committed["publication"], "committed");
     let events: Vec<String> = db
         .store
@@ -1924,6 +1992,425 @@ fn native_material_acceptance_publishes_local_manifest_and_rejects_stale_inputs(
         deleted_locate.code,
         ErrorCode::SearchInvalidated | ErrorCode::SourceDeleted
     ));
+}
+
+#[test]
+fn native_material_page_bridge_rejects_stale_order_parent_hash_coverage_and_resource_overwrite() {
+    fn manifest(
+        material_id: &str,
+        source_version_id: &str,
+        parse_version_id: &str,
+        parent_parse_version_id: Option<String>,
+        source_hash: &str,
+        page_id: &str,
+        object_id: &str,
+        object_revision: &str,
+        resource: Option<Resource>,
+    ) -> MaterialManifest {
+        let region_id = storage::id();
+        let block_id = storage::id();
+        let element_id = storage::id();
+        let source = SourceRef {
+            entity_id: material_id.into(),
+            revision_id: source_version_id.into(),
+            content_hash: source_hash.into(),
+            selector: Selector::V4(WholeSelector {
+                kind: "whole".into(),
+            }),
+        };
+        let preview_resource_id = resource.as_ref().map(|resource| resource.resource_id.clone());
+        serde_json::from_value(json!({
+            "format":"focaus.material",
+            "format_version":"2.0.0",
+            "material_id":material_id,
+            "source_version_id":source_version_id,
+            "parse_version_id":parse_version_id,
+            "parent_parse_version_id":parent_parse_version_id,
+            "source_hash":source_hash,
+            "engine_build":"native-test",
+            "parse_profile":"light",
+            "requested_pages":[0],
+            "pages":[{
+                "page_id":page_id,
+                "revision_id":storage::id(),
+                "source_page_index":0,
+                "display_label":"1",
+                "width":100.0,
+                "height":100.0,
+                "unit":"pt",
+                "rotation":0,
+                "source_transform":[],
+                "preview_resource_id":preview_resource_id,
+                "reading_order":[object_id],
+                "region_ids":[region_id],
+                "status":"complete",
+                "errors":[]
+            }],
+            "regions":[{
+                "region_id":region_id,
+                "page_id":page_id,
+                "bbox":[0.,0.,1.,1.],
+                "object_ids":[object_id],
+                "semantic_role":"body",
+                "parent_region_id":null
+            }],
+            "objects":[{
+                "object_id":object_id,
+                "revision_id":object_revision,
+                "source_refs":[source],
+                "region_ids":[region_id],
+                "layout":{"bounds":[0.,0.,1.,1.],"z_order":0,"group_id":null,"constraints":[]},
+                "extraction":"native",
+                "editability":"native",
+                "status":"complete",
+                "children":[],
+                "type":"text",
+                "content":{"block_id":block_id,"runs":[{"element_id":element_id,"text":"staged page"}],"level":1}
+            }],
+            "resources":resource.into_iter().collect::<Vec<_>>(),
+            "corrections_applied":[],
+            "unresolved_conflicts":[],
+            "provenance":{},
+            "completion":"complete",
+            "search_units":[],
+            "search_coverage":{
+                "requested_pages":[page_id],
+                "processed_pages":[page_id],
+                "unprocessed":[],
+                "failed":[],
+                "state":"complete"
+            }
+        }))
+        .unwrap()
+    }
+
+    fn payload(
+        task_id: &str,
+        material_id: &str,
+        source_version_id: &str,
+        final_parse_version_id: &str,
+        source_hash: &str,
+        manifest: MaterialManifest,
+        sequence: u64,
+        publication_parent: Option<&str>,
+        published: Vec<String>,
+        next_sequence: u64,
+    ) -> Value {
+        let page = manifest.pages[0].clone();
+        let publication = manifest.parse_version_id.clone();
+        json!({
+            "format":"focaus.material",
+            "format_version":"2.0.0",
+            "material_id":material_id,
+            "source_version_id":source_version_id,
+            "source_hash":manifest.source_hash,
+            "parse_version_id":publication,
+            "snapshot_parse_version_id":manifest.parse_version_id,
+            "publication_sequence":sequence,
+            "manifest":manifest,
+            "page":page,
+            "progress":{
+                "contract_version":"2.0.0",
+                "task_id":task_id,
+                "material_id":material_id,
+                "parse_version_id":final_parse_version_id,
+                "parent_parse_version_id":null,
+                "publication_parse_version_id":publication,
+                "publication_parent_parse_version_id":publication_parent,
+                "source_version_id":source_version_id,
+                "head_parse_version_id":publication,
+                "published_parse_versions":published,
+                "next_publication_sequence":next_sequence,
+                "source_hash":source_hash,
+                "profile":"light",
+                "requested_pages":[0],
+                "completed_pages":[0],
+                "failed_pages":[],
+                "state":"running"
+            }
+        })
+    }
+
+    let db = TestLibrary::new();
+    let host = ipc::NativeHost::open(&db.path, INITIAL_MIGRATION).unwrap();
+    let lesson_id = lesson(&db.store);
+    let source_file = db.path.join("bridge.txt");
+    std::fs::write(&source_file, "bridge source").unwrap();
+    let job = host
+        .import_material_original(
+            &source_file,
+            &lesson_id,
+            MaterialImportInputPurpose::Textbook,
+            vec![0],
+        )
+        .unwrap();
+    let source = job.input.snapshot.sources[0].clone();
+    host.tasks
+        .transition(&job.task.task_id, 1, TaskState::Running)
+        .unwrap();
+    let page_id = storage::id();
+    let object_id = storage::id();
+    let object_revision = storage::id();
+    let first_parse = storage::id();
+    let first_manifest = manifest(
+        &job.material_id,
+        &job.source_version_id,
+        &first_parse,
+        None,
+        &source.content_hash,
+        &page_id,
+        &object_id,
+        &object_revision,
+        None,
+    );
+    let first_payload = payload(
+        &job.task.task_id,
+        &job.material_id,
+        &job.source_version_id,
+        &job.parse_version_id,
+        &source.content_hash,
+        first_manifest,
+        0,
+        None,
+        vec![first_parse.clone()],
+        1,
+    );
+    host.accept_material_page_result(&job.task.task_id, &job.task.snapshot_id, &first_payload)
+        .unwrap();
+
+    let mut gap = first_payload.clone();
+    gap["publication_sequence"] = json!(2);
+    assert_eq!(
+        host.accept_material_page_result(&job.task.task_id, &job.task.snapshot_id, &gap)
+            .unwrap_err()
+            .code,
+        ErrorCode::StaleInput
+    );
+
+    let second_parse = storage::id();
+    let wrong_parent = storage::id();
+    let wrong_parent_manifest = manifest(
+        &job.material_id,
+        &job.source_version_id,
+        &second_parse,
+        Some(wrong_parent.clone()),
+        &source.content_hash,
+        &page_id,
+        &object_id,
+        &object_revision,
+        None,
+    );
+    let wrong_parent_payload = payload(
+        &job.task.task_id,
+        &job.material_id,
+        &job.source_version_id,
+        &job.parse_version_id,
+        &source.content_hash,
+        wrong_parent_manifest,
+        1,
+        Some(&wrong_parent),
+        vec![first_parse.clone(), second_parse.clone()],
+        2,
+    );
+    assert_eq!(
+        host.accept_material_page_result(
+            &job.task.task_id,
+            &job.task.snapshot_id,
+            &wrong_parent_payload,
+        )
+        .unwrap_err()
+        .code,
+        ErrorCode::StaleInput
+    );
+
+    let stale_hash = "0".repeat(64);
+    let stale_hash_manifest = manifest(
+        &job.material_id,
+        &job.source_version_id,
+        &second_parse,
+        Some(first_parse.clone()),
+        &stale_hash,
+        &page_id,
+        &object_id,
+        &object_revision,
+        None,
+    );
+    let stale_hash_payload = payload(
+        &job.task.task_id,
+        &job.material_id,
+        &job.source_version_id,
+        &job.parse_version_id,
+        &source.content_hash,
+        stale_hash_manifest,
+        1,
+        Some(&first_parse),
+        vec![first_parse.clone(), second_parse.clone()],
+        2,
+    );
+    assert_eq!(
+        host.accept_material_page_result(
+            &job.task.task_id,
+            &job.task.snapshot_id,
+            &stale_hash_payload,
+        )
+        .unwrap_err()
+        .code,
+        ErrorCode::InvalidResult
+    );
+
+    let coverage_manifest = manifest(
+        &job.material_id,
+        &job.source_version_id,
+        &second_parse,
+        Some(first_parse.clone()),
+        &source.content_hash,
+        &page_id,
+        &object_id,
+        &object_revision,
+        None,
+    );
+    let mut coverage_payload = payload(
+        &job.task.task_id,
+        &job.material_id,
+        &job.source_version_id,
+        &job.parse_version_id,
+        &source.content_hash,
+        coverage_manifest,
+        1,
+        Some(&first_parse),
+        vec![first_parse.clone(), second_parse.clone()],
+        2,
+    );
+    coverage_payload["manifest"]["search_coverage"]["requested_pages"] =
+        json!([storage::id()]);
+    assert_eq!(
+        host.accept_material_page_result(
+            &job.task.task_id,
+            &job.task.snapshot_id,
+            &coverage_payload,
+        )
+        .unwrap_err()
+        .code,
+        ErrorCode::StaleInput
+    );
+
+    let resource_id = storage::id();
+    let relative_path = format!("resources/{resource_id}.asset");
+    let stage = library::resources::staging_root(&db.path, &job.task.task_id).unwrap();
+    std::fs::create_dir_all(stage.join("resources")).unwrap();
+    let resource_path = stage.join(&relative_path);
+    let bytes_a = b"resource-a";
+    std::fs::write(&resource_path, bytes_a).unwrap();
+    let resource_a = Resource {
+        resource_id: resource_id.clone(),
+        media_type: "image/png".into(),
+        byte_length: bytes_a.len() as u64,
+        sha256: search_text_hash("resource-a"),
+        relative_path: relative_path.clone(),
+        role: "preview".into(),
+        owner_refs: vec![object_id.clone()],
+    };
+    let resource_parse = storage::id();
+    let resource_manifest = manifest(
+        &job.material_id,
+        &job.source_version_id,
+        &resource_parse,
+        Some(first_parse.clone()),
+        &source.content_hash,
+        &page_id,
+        &object_id,
+        &object_revision,
+        Some(resource_a),
+    );
+    let resource_payload = payload(
+        &job.task.task_id,
+        &job.material_id,
+        &job.source_version_id,
+        &job.parse_version_id,
+        &source.content_hash,
+        resource_manifest,
+        1,
+        Some(&first_parse),
+        vec![first_parse.clone(), resource_parse.clone()],
+        2,
+    );
+    host.accept_material_page_result(&job.task.task_id, &job.task.snapshot_id, &resource_payload)
+        .unwrap();
+
+    let bytes_b = b"resource-b";
+    std::fs::write(&resource_path, bytes_b).unwrap();
+    let overwritten_resource = Resource {
+        resource_id,
+        media_type: "image/png".into(),
+        byte_length: bytes_b.len() as u64,
+        sha256: search_text_hash("resource-b"),
+        relative_path,
+        role: "preview".into(),
+        owner_refs: vec![object_id.clone()],
+    };
+    let overwrite_parse = storage::id();
+    let overwrite_manifest = manifest(
+        &job.material_id,
+        &job.source_version_id,
+        &overwrite_parse,
+        Some(resource_parse.clone()),
+        &source.content_hash,
+        &page_id,
+        &object_id,
+        &object_revision,
+        Some(overwritten_resource),
+    );
+    let overwrite_payload = payload(
+        &job.task.task_id,
+        &job.material_id,
+        &job.source_version_id,
+        &job.parse_version_id,
+        &source.content_hash,
+        overwrite_manifest,
+        2,
+        Some(&resource_parse),
+        vec![first_parse.clone(), resource_parse.clone(), overwrite_parse],
+        3,
+    );
+    assert_eq!(
+        host.accept_material_page_result(
+            &job.task.task_id,
+            &job.task.snapshot_id,
+            &overwrite_payload,
+        )
+        .unwrap_err()
+        .code,
+        ErrorCode::Conflict
+    );
+
+    let current_progress = resource_payload["progress"].clone();
+    let mut old_sequence = current_progress.clone();
+    old_sequence["next_publication_sequence"] = json!(1);
+    old_sequence["head_parse_version_id"] = json!(first_parse);
+    old_sequence["publication_parse_version_id"] = json!(first_parse);
+    old_sequence["publication_parent_parse_version_id"] = Value::Null;
+    old_sequence["published_parse_versions"] = json!([old_sequence["published_parse_versions"][0].clone()]);
+    assert_eq!(
+        host.record_material_checkpoint(&job.task.task_id, 1, &old_sequence)
+            .unwrap_err()
+            .code,
+        ErrorCode::StaleInput
+    );
+    assert_eq!(
+        host.record_material_checkpoint(&job.task.task_id, 0, &current_progress)
+            .unwrap_err()
+            .code,
+        ErrorCode::StaleInput
+    );
+    host.tasks
+        .transition(&job.task.task_id, 1, TaskState::Failed)
+        .unwrap();
+    assert_eq!(
+        host.record_material_checkpoint(&job.task.task_id, 1, &current_progress)
+            .unwrap_err()
+            .code,
+        ErrorCode::StaleInput
+    );
 }
 
 #[test]

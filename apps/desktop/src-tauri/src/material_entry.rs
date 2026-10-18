@@ -67,9 +67,10 @@ pub fn import_from_picker(
     })
 }
 
-/// Run the configured local material engine and publish only its completed
-/// immutable manifest. No network client or credential resolver is reachable
-/// from this process boundary.
+/// Run the configured local material engine. Page results and checkpoints are
+/// validated into the host-owned task staging state; only the completed
+/// manifest can advance the immutable material head. No network client or
+/// credential resolver is reachable from this process boundary.
 pub fn run_local_sidecar(host: &NativeHost, task_id: &str) -> Result<Value, SafeError> {
     let job = host.materials.job(task_id)?;
     let _ = host
@@ -220,11 +221,11 @@ fn run_local_sidecar_inner(
                         "Material engine manifest is invalid",
                     )
                 })?;
-                let result = host.accept_material_result(MaterialPageResultInput {
+                let result = host.accept_material_completed(MaterialPageResultInput {
                     task_id: task_id.into(),
                     snapshot_id: job.task.snapshot_id.clone(),
                     manifest,
-                })?;
+                }, &response.payload)?;
                 let _ = host
                     .tasks
                     .transition(task_id, job.task.attempt, TaskState::Succeeded)?;
@@ -236,7 +237,12 @@ fn run_local_sidecar_inner(
                     "Material engine rejected the local request",
                 ));
             }
-            EngineResponseKind::PageResult | EngineResponseKind::Checkpoint => {}
+            EngineResponseKind::PageResult => {
+                host.accept_material_page_result(task_id, &job.task.snapshot_id, &response.payload)?;
+            }
+            EngineResponseKind::Checkpoint => {
+                host.record_material_checkpoint(task_id, job.task.attempt, &response.payload)?;
+            }
         }
     }
     let status = child.wait().map_err(|_| {

@@ -715,6 +715,30 @@ impl NativeHost {
     pub fn accept_material_result(&self, input: MaterialPageResultInput) -> Result<Value> {
         self.materials.accept(input)
     }
+    pub fn accept_material_page_result(
+        &self,
+        task_id: &str,
+        snapshot_id: &str,
+        payload: &Value,
+    ) -> Result<Value> {
+        self.materials
+            .accept_page_result(task_id, snapshot_id, payload)
+    }
+    pub fn record_material_checkpoint(
+        &self,
+        task_id: &str,
+        attempt: u64,
+        payload: &Value,
+    ) -> Result<Task> {
+        self.materials.record_checkpoint(task_id, attempt, payload)
+    }
+    pub fn accept_material_completed(
+        &self,
+        input: MaterialPageResultInput,
+        payload: &Value,
+    ) -> Result<Value> {
+        self.materials.accept_completed(input, payload)
+    }
     pub fn read_resource(&self, input: ResourceReadInput) -> Result<Value> {
         crate::library::resources::read_resource(&self.store, input)
     }

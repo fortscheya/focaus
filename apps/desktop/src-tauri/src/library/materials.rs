@@ -11,10 +11,13 @@ use crate::{
 };
 use focaus_contracts::*;
 use rusqlite::{params, Connection, OptionalExtension};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File},
+    io::Read,
     path::{Path, PathBuf},
     sync::Mutex,
 };
@@ -81,6 +84,327 @@ pub struct MaterialService {
     store: Store,
     accept_gate: Mutex<()>,
     jobs: Mutex<BTreeMap<String, MaterialJob>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct StagedPublication {
+    sequence: u64,
+    parse_version_id: String,
+    manifest_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct StagedResource {
+    relative_path: String,
+    sha256: String,
+    media_type: String,
+    byte_length: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct MaterialBridgeState {
+    material_id: String,
+    source_version_id: String,
+    source_hash: String,
+    final_parse_version_id: String,
+    base_parent_parse_version_id: Option<String>,
+    requested_pages: Vec<u64>,
+    next_publication_sequence: u64,
+    head_parse_version_id: Option<String>,
+    state: String,
+    accepted_publications: Vec<StagedPublication>,
+    resources: BTreeMap<String, StagedResource>,
+    search_coverage: Option<ExtractionCoverage>,
+    progress: Value,
+    completed_progress_hash: Option<String>,
+}
+
+fn required_string(value: &Value, key: &str) -> Result<String> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            let _ = key;
+            error(ErrorCode::InvalidResult, "Material progress string is missing")
+        })
+}
+
+fn optional_string(value: &Value, key: &str) -> Result<Option<String>> {
+    match value.get(key) {
+        Some(Value::Null) | None => Ok(None),
+        Some(value) => value
+            .as_str()
+            .map(|value| Some(value.to_owned()))
+            .ok_or_else(|| {
+                let _ = key;
+                error(ErrorCode::InvalidResult, "Material progress string is invalid")
+            }),
+    }
+}
+
+fn required_u64(value: &Value, key: &str) -> Result<u64> {
+    value
+        .get(key)
+        .and_then(Value::as_u64)
+        .ok_or_else(|| {
+            let _ = key;
+            error(ErrorCode::InvalidResult, "Material progress number is missing")
+        })
+}
+
+fn manifest_from_payload(payload: &Value) -> Result<MaterialManifest> {
+    let value = payload
+        .get("manifest")
+        .cloned()
+        .ok_or_else(|| error(ErrorCode::InvalidResult, "Material page result has no manifest"))?;
+    let manifest: MaterialManifest = serde_json::from_value(value.clone()).map_err(|_| {
+        error(
+            ErrorCode::InvalidResult,
+            "Material page result manifest is invalid",
+        )
+    })?;
+    validate("MaterialManifest", &storage::value(&manifest)?)?;
+    Ok(manifest)
+}
+
+fn progress_from_payload(payload: &Value) -> Result<Value> {
+    let progress = payload
+        .get("progress")
+        .cloned()
+        .ok_or_else(|| error(ErrorCode::InvalidResult, "Material response has no progress"))?;
+    if !progress.is_object() {
+        return Err(error(
+            ErrorCode::InvalidResult,
+            "Material response progress is not an object",
+        ));
+    }
+    Ok(progress)
+}
+
+fn bridge_from_task(task: &Task, snapshot: &InputSnapshot) -> Result<MaterialBridgeState> {
+    let source = snapshot
+        .sources
+        .iter()
+        .find(|source| source.entity_id == task.target_id)
+        .ok_or_else(|| error(ErrorCode::InvalidResult, "Material snapshot source is missing"))?;
+    let final_parse_version_id = task
+        .checkpoint
+        .get("parse_version_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| error(ErrorCode::CorruptAsset, "Material task parse identity is missing"))?;
+    let base_parent_parse_version_id = match task.checkpoint.get("parent_parse_version_id") {
+        Some(Value::Null) | None => None,
+        Some(value) => Some(value.as_str().ok_or_else(|| {
+            error(
+                ErrorCode::CorruptAsset,
+                "Material task parent parse identity is invalid",
+            )
+        })?.to_owned()),
+    };
+    if let Some(value) = task.checkpoint.get("material_bridge") {
+        let bridge: MaterialBridgeState = serde_json::from_value(value.clone()).map_err(|_| {
+            error(
+                ErrorCode::CorruptAsset,
+                "Material task bridge checkpoint is invalid",
+            )
+        })?;
+        if bridge.material_id != task.target_id
+            || bridge.source_version_id != source.revision_id
+            || bridge.source_hash != source.content_hash
+            || bridge.final_parse_version_id != final_parse_version_id
+            || bridge.base_parent_parse_version_id != base_parent_parse_version_id
+        {
+            return Err(error(
+                ErrorCode::StaleInput,
+                "Material task bridge identity changed",
+            ));
+        }
+        return Ok(bridge);
+    }
+    Ok(MaterialBridgeState {
+        material_id: task.target_id.clone(),
+        source_version_id: source.revision_id.clone(),
+        source_hash: source.content_hash.clone(),
+        final_parse_version_id: final_parse_version_id.into(),
+        base_parent_parse_version_id,
+        requested_pages: Vec::new(),
+        next_publication_sequence: 0,
+        head_parse_version_id: task
+            .checkpoint
+            .get("parent_parse_version_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        state: "running".into(),
+        accepted_publications: Vec::new(),
+        resources: BTreeMap::new(),
+        search_coverage: None,
+        progress: json!({}),
+        completed_progress_hash: None,
+    })
+}
+
+fn checkpoint_with_bridge(
+    task: &Task,
+    bridge: &MaterialBridgeState,
+) -> Result<BTreeMap<String, Value>> {
+    let mut checkpoint = task.checkpoint.clone();
+    checkpoint.insert(
+        "material_bridge".into(),
+        serde_json::to_value(bridge).map_err(|_| {
+            error(
+                ErrorCode::InvalidResult,
+                "Material bridge checkpoint could not be encoded",
+            )
+        })?,
+    );
+    Ok(checkpoint)
+}
+
+fn validate_coverage(
+    previous: Option<&ExtractionCoverage>,
+    current: &ExtractionCoverage,
+) -> Result<()> {
+    if let Some(previous) = previous {
+        if previous.requested_pages != current.requested_pages
+            || previous
+                .processed_pages
+                .iter()
+                .any(|page| !current.processed_pages.contains(page))
+        {
+            return Err(error(
+                ErrorCode::StaleInput,
+                "Material search coverage moved backwards",
+            ));
+        }
+        if previous.state == ExtractionCoverageState::Complete
+            && current.state != ExtractionCoverageState::Complete
+        {
+            return Err(error(
+                ErrorCode::StaleInput,
+                "Material search coverage was downgraded",
+            ));
+        }
+    }
+    if current.state == ExtractionCoverageState::Complete
+        && current
+            .requested_pages
+            .iter()
+            .any(|page| !current.processed_pages.contains(page))
+    {
+        return Err(error(
+            ErrorCode::InvalidResult,
+            "Complete material search coverage omits a requested page",
+        ));
+    }
+    Ok(())
+}
+
+fn verify_staged_resource(stage: &Path, resource: &Resource) -> Result<StagedResource> {
+    let mut file = resources::open_relative(stage, Path::new(&resource.relative_path))?;
+    validate_preview(&mut file, &resource.media_type)?;
+    let mut digest = Sha256::new();
+    let mut length = 0u64;
+    let mut buffer = [0u8; 65536];
+    loop {
+        let count = file.read(&mut buffer).map_err(io_error)?;
+        if count == 0 {
+            break;
+        }
+        length = length
+            .checked_add(count as u64)
+            .ok_or_else(|| error(ErrorCode::CorruptAsset, "Material resource length overflow"))?;
+        if length > 64 * 1024 * 1024 {
+            return Err(error(
+                ErrorCode::InvalidArgument,
+                "Material resource exceeds the staging budget",
+            ));
+        }
+        digest.update(&buffer[..count]);
+    }
+    let sha256 = format!("{:x}", digest.finalize());
+    if length != resource.byte_length || sha256 != resource.sha256 {
+        return Err(error(
+            ErrorCode::CorruptAsset,
+            "Material staged resource hash or size mismatch",
+        ));
+    }
+    Ok(StagedResource {
+        relative_path: resource.relative_path.clone(),
+        sha256: resource.sha256.clone(),
+        media_type: resource.media_type.clone(),
+        byte_length: resource.byte_length,
+    })
+}
+
+fn validate_publication_list(
+    progress: &Value,
+    bridge: &MaterialBridgeState,
+    final_parse_version_id: Option<&str>,
+) -> Result<()> {
+    let list = progress
+        .get("published_parse_versions")
+        .and_then(Value::as_array)
+        .ok_or_else(|| error(ErrorCode::InvalidResult, "Material publication list is missing"))?;
+    let expected = bridge.accepted_publications.len() + usize::from(final_parse_version_id.is_some());
+    if list.len() != expected {
+        return Err(error(
+            ErrorCode::StaleInput,
+            "Material publication list is out of order",
+        ));
+    }
+    for (value, publication) in list.iter().zip(&bridge.accepted_publications) {
+        if value.as_str() != Some(publication.parse_version_id.as_str()) {
+            return Err(error(
+                ErrorCode::StaleInput,
+                "Material publication parent chain changed",
+            ));
+        }
+    }
+    if let Some(final_parse_version_id) = final_parse_version_id {
+        if list.last().and_then(Value::as_str) != Some(final_parse_version_id) {
+            return Err(error(
+                ErrorCode::StaleInput,
+                "Material final publication identity changed",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_progress_base(
+    progress: &Value,
+    task: &Task,
+    snapshot: &InputSnapshot,
+    bridge: &MaterialBridgeState,
+    state: &str,
+) -> Result<u64> {
+    if progress.get("contract_version").and_then(Value::as_str) != Some(CONTRACT_VERSION)
+        || required_string(progress, "task_id")? != task.task_id
+        || required_string(progress, "material_id")? != task.target_id
+        || required_string(progress, "source_version_id")? != bridge.source_version_id
+        || required_string(progress, "source_hash")? != bridge.source_hash
+        || required_string(progress, "parse_version_id")? != bridge.final_parse_version_id
+        || optional_string(progress, "parent_parse_version_id")?
+            != bridge.base_parent_parse_version_id
+        || required_string(progress, "state")? != state
+    {
+        return Err(error(
+            ErrorCode::StaleInput,
+            "Material progress identity does not match the frozen task",
+        ));
+    }
+    if !snapshot.sources.iter().any(|source| {
+        source.entity_id == task.target_id
+            && source.revision_id == bridge.source_version_id
+            && source.content_hash == bridge.source_hash
+    }) {
+        return Err(error(
+            ErrorCode::InvalidResult,
+            "Material progress source changed",
+        ));
+    }
+    Ok(required_u64(progress, "next_publication_sequence")?)
 }
 
 fn validate_publication_parent(
@@ -381,6 +705,427 @@ impl MaterialService {
                 )
             })
     }
+    fn material_context(
+        &self,
+        task_id: &str,
+        snapshot_id: &str,
+    ) -> Result<(Task, InputSnapshot, MaterialBridgeState, PathBuf)> {
+        let task = TaskManager::new(self.store.clone()).get(task_id)?;
+        if task.kind != TaskKind::MaterialConvert && task.kind != TaskKind::MaterialReparse {
+            return Err(error(
+                ErrorCode::PermissionDenied,
+                "Task is not a material conversion",
+            ));
+        }
+        if task.snapshot_id != snapshot_id
+            || !matches!(
+                task.state,
+                TaskState::Queued | TaskState::Running | TaskState::Interrupted
+            )
+        {
+            return Err(error(
+                ErrorCode::StaleInput,
+                "Material task input or state changed",
+            ));
+        }
+        let snapshot = self.store.read(|c| {
+            let snapshot = snapshots::load(c, snapshot_id)?;
+            snapshots::check_frozen(c, &snapshot)?;
+            Ok(snapshot)
+        })?;
+        let bridge = bridge_from_task(&task, &snapshot)?;
+        let stage = resources::staging_root(self.store.root(), task_id)?;
+        Ok((task, snapshot, bridge, stage))
+    }
+
+    fn validate_staged_resources(
+        &self,
+        stage: &Path,
+        manifest: &MaterialManifest,
+        bridge: &MaterialBridgeState,
+    ) -> Result<BTreeMap<String, StagedResource>> {
+        let mut resources_by_id = BTreeMap::new();
+        for resource in &manifest.resources {
+            let staged = verify_staged_resource(stage, resource)?;
+            if resources_by_id
+                .insert(resource.resource_id.clone(), staged.clone())
+                .is_some()
+            {
+                return Err(error(
+                    ErrorCode::InvalidResult,
+                    "Material page result repeats a resource identity",
+                ));
+            }
+            if let Some(previous) = bridge.resources.get(&resource.resource_id) {
+                if previous != &staged {
+                    return Err(error(
+                        ErrorCode::Conflict,
+                        "Material page result overwrites a staged resource",
+                    ));
+                }
+            }
+            if resources_by_id.iter().any(|(other_id, other)| {
+                other_id != &resource.resource_id && other.relative_path == staged.relative_path
+            }) || bridge.resources.iter().any(|(other_id, other)| {
+                other_id != &resource.resource_id && other.relative_path == staged.relative_path
+            }) {
+                return Err(error(
+                    ErrorCode::Conflict,
+                    "Material page result aliases a resource path",
+                ));
+            }
+            let existing = self.store.read(|c| {
+                c.query_row(
+                    "SELECT sha256,byte_length,relative_path,media_type FROM resources WHERE resource_id=?1",
+                    [&resource.resource_id],
+                    |r| {
+                        Ok((
+                            r.get::<_, String>(0)?,
+                            r.get::<_, u64>(1)?,
+                            r.get::<_, String>(2)?,
+                            r.get::<_, String>(3)?,
+                        ))
+                    },
+                )
+                .optional()
+                .map_err(sql_error)
+            })?;
+            if existing.is_some_and(|existing| {
+                existing
+                    != (
+                        resource.sha256.clone(),
+                        resource.byte_length,
+                        resource.relative_path.clone(),
+                        resource.media_type.clone(),
+                    )
+            }) {
+                return Err(error(
+                    ErrorCode::Conflict,
+                    "Material page result conflicts with a managed resource",
+                ));
+            }
+            let path_owner: Option<String> = self.store.read(|c| {
+                c.query_row(
+                    "SELECT resource_id FROM resources WHERE relative_path=?1 AND resource_id<>?2 LIMIT 1",
+                    params![resource.relative_path, resource.resource_id],
+                    |r| r.get(0),
+                )
+                .optional()
+                .map_err(sql_error)
+            })?;
+            if path_owner.is_some() {
+                return Err(error(
+                    ErrorCode::Conflict,
+                    "Material page result reuses a managed resource path",
+                ));
+            }
+        }
+        for (resource_id, resource) in &bridge.resources {
+            if let Some(current) = resources_by_id.get(resource_id) {
+                if current != resource {
+                    return Err(error(
+                        ErrorCode::Conflict,
+                        "Material page result changed an earlier resource",
+                    ));
+                }
+            }
+        }
+        Ok(resources_by_id)
+    }
+
+    /// Validate and stage one sidecar page snapshot. This updates only the
+    /// task checkpoint; material entities, parse_versions and search indexes
+    /// remain untouched until the final completed manifest is accepted.
+    pub fn accept_page_result(
+        &self,
+        task_id: &str,
+        snapshot_id: &str,
+        payload: &Value,
+    ) -> Result<Value> {
+        let _gate = self
+            .accept_gate
+            .lock()
+            .map_err(|_| error(ErrorCode::InvalidResult, "Material acceptance unavailable"))?;
+        let manifest = manifest_from_payload(payload)?;
+        let page: Page = serde_json::from_value(
+            payload
+                .get("page")
+                .cloned()
+                .ok_or_else(|| error(ErrorCode::InvalidResult, "Material page result has no page"))?,
+        )
+        .map_err(|_| error(ErrorCode::InvalidResult, "Material page result page is invalid"))?;
+        let progress = progress_from_payload(payload)?;
+        let publication_sequence = required_u64(payload, "publication_sequence")?;
+        let snapshot_parse_version_id = required_string(payload, "snapshot_parse_version_id")?;
+        if required_string(payload, "parse_version_id")? != snapshot_parse_version_id
+            || manifest.parse_version_id != snapshot_parse_version_id
+        {
+            return Err(error(
+                ErrorCode::InvalidResult,
+                "Material page snapshot identity is inconsistent",
+            ));
+        }
+        let (task, snapshot, mut bridge, stage) = self.material_context(task_id, snapshot_id)?;
+        if manifest.material_id != task.target_id
+            || manifest.source_version_id != bridge.source_version_id
+            || manifest.source_hash != bridge.source_hash
+        {
+            return Err(error(
+                ErrorCode::InvalidResult,
+                "Material page result changed the immutable original source",
+            ));
+        }
+        if bridge.state != "running" {
+            return Err(error(
+                ErrorCode::StaleInput,
+                "Material page result arrived after completion",
+            ));
+        }
+        if publication_sequence < bridge.next_publication_sequence {
+            let hash = canonical_hash(&storage::value(&manifest)?);
+            if bridge.accepted_publications.iter().any(|publication| {
+                publication.sequence == publication_sequence
+                    && publication.parse_version_id == manifest.parse_version_id
+                    && publication.manifest_hash == hash
+            }) {
+                return Ok(json!({
+                    "accepted":true,
+                    "duplicate":true,
+                    "publication_sequence":publication_sequence,
+                    "snapshot_parse_version_id":manifest.parse_version_id
+                }));
+            }
+            return Err(error(
+                ErrorCode::StaleInput,
+                "Material page result sequence is older than staged progress",
+            ));
+        }
+        if publication_sequence > bridge.next_publication_sequence {
+            return Err(error(
+                ErrorCode::StaleInput,
+                "Material page result sequence skipped staged progress",
+            ));
+        }
+        let next_sequence = validate_progress_base(&progress, &task, &snapshot, &bridge, "running")?;
+        if next_sequence != publication_sequence + 1
+            || required_string(&progress, "publication_parse_version_id")?
+                != manifest.parse_version_id
+            || optional_string(&progress, "publication_parent_parse_version_id")?
+                != manifest.parent_parse_version_id
+            || optional_string(&progress, "head_parse_version_id")?
+                != Some(manifest.parse_version_id.clone())
+            || manifest.parent_parse_version_id != bridge.head_parse_version_id
+        {
+            return Err(error(
+                ErrorCode::StaleInput,
+                "Material page result parent chain changed",
+            ));
+        }
+        let manifest_hash = canonical_hash(&storage::value(&manifest)?);
+        let mut publication_chain = bridge.clone();
+        publication_chain.accepted_publications.push(StagedPublication {
+            sequence: publication_sequence,
+            parse_version_id: manifest.parse_version_id.clone(),
+            manifest_hash: manifest_hash.clone(),
+        });
+        validate_publication_list(&progress, &publication_chain, None)?;
+        if bridge.requested_pages.is_empty() {
+            bridge.requested_pages = manifest.requested_pages.clone();
+        } else if bridge.requested_pages != manifest.requested_pages {
+            return Err(error(
+                ErrorCode::StaleInput,
+                "Material requested page set changed",
+            ));
+        }
+        validate_coverage(bridge.search_coverage.as_ref(), &manifest.search_coverage)?;
+        let resources_by_id = self.validate_staged_resources(&stage, &manifest, &bridge)?;
+        if !manifest.pages.iter().any(|candidate| candidate == &page) {
+            return Err(error(
+                ErrorCode::InvalidResult,
+                "Material page result is outside its manifest",
+            ));
+        }
+        bridge.accepted_publications.push(StagedPublication {
+            sequence: publication_sequence,
+            parse_version_id: manifest.parse_version_id.clone(),
+            manifest_hash,
+        });
+        bridge.next_publication_sequence = next_sequence;
+        bridge.head_parse_version_id = Some(manifest.parse_version_id.clone());
+        bridge.resources = resources_by_id;
+        bridge.search_coverage = Some(manifest.search_coverage.clone());
+        bridge.progress = progress;
+        let safe_state = checkpoint_with_bridge(&task, &bridge)?;
+        TaskManager::new(self.store.clone()).checkpoint_material(TaskCheckpointInput {
+            task_id: task.task_id,
+            attempt: task.attempt,
+            cursor: format!("material-page:{publication_sequence}:{}", manifest.parse_version_id),
+            safe_state,
+        })?;
+        Ok(json!({
+            "accepted":true,
+            "duplicate":false,
+            "publication_sequence":publication_sequence,
+            "snapshot_parse_version_id":manifest.parse_version_id,
+            "search_projection":"staged"
+        }))
+    }
+
+    /// Persist a sidecar checkpoint after validating its monotonic relation to
+    /// the last staged page. A completed checkpoint is still only a marker;
+    /// it never publishes a material head or search projection.
+    pub fn record_checkpoint(
+        &self,
+        task_id: &str,
+        attempt: u64,
+        payload: &Value,
+    ) -> Result<Task> {
+        let _gate = self
+            .accept_gate
+            .lock()
+            .map_err(|_| error(ErrorCode::InvalidResult, "Material acceptance unavailable"))?;
+        let progress = if payload.get("progress").is_some() {
+            progress_from_payload(payload)?
+        } else {
+            payload.clone()
+        };
+        let task_snapshot_id = TaskManager::new(self.store.clone()).get(task_id)?.snapshot_id;
+        let (task, snapshot, mut bridge, _) = self.material_context(task_id, &task_snapshot_id)?;
+        if task.attempt != attempt {
+            return Err(error(ErrorCode::StaleInput, "Material checkpoint attempt changed"));
+        }
+        let state = required_string(&progress, "state")?;
+        let next_sequence = validate_progress_base(&progress, &task, &snapshot, &bridge, &state)?;
+        if state == "running" {
+            if bridge.state != "running"
+                || next_sequence != bridge.next_publication_sequence
+                || optional_string(&progress, "head_parse_version_id")?
+                    != bridge.head_parse_version_id
+            {
+                return Err(error(
+                    ErrorCode::StaleInput,
+                    "Material running checkpoint is out of order",
+                ));
+            }
+            let expected_publication = bridge.head_parse_version_id.as_deref().ok_or_else(|| {
+                error(
+                    ErrorCode::InvalidResult,
+                    "Material running checkpoint has no staged publication",
+                )
+            })?;
+            if required_string(&progress, "publication_parse_version_id")?
+                != expected_publication
+                || optional_string(&progress, "publication_parent_parse_version_id")?
+                    != bridge
+                        .accepted_publications
+                        .last()
+                        .and_then(|publication| {
+                            bridge
+                                .accepted_publications
+                                .iter()
+                                .find(|candidate| candidate.sequence + 1 == publication.sequence)
+                                .map(|candidate| candidate.parse_version_id.clone())
+                        })
+            {
+                // The page result already checked the parent chain. Keep this
+                // checkpoint check narrow: the head and sequence are the
+                // authoritative replay coordinates.
+                return Err(error(
+                    ErrorCode::StaleInput,
+                    "Material running checkpoint publication changed",
+                ));
+            }
+            validate_publication_list(&progress, &bridge, None)?;
+            bridge.progress = progress;
+        } else if state == "completed" {
+            let progress_hash = canonical_hash(&progress);
+            if bridge.state == "completed" {
+                if bridge.next_publication_sequence == next_sequence
+                    && bridge.head_parse_version_id.as_deref()
+                        == Some(bridge.final_parse_version_id.as_str())
+                    && bridge.completed_progress_hash.as_deref() == Some(progress_hash.as_str())
+                {
+                    return Ok(task);
+                }
+                return Err(error(
+                    ErrorCode::StaleInput,
+                    "Material completion checkpoint is not idempotent",
+                ));
+            }
+            if next_sequence != bridge.next_publication_sequence + 1
+                || optional_string(&progress, "head_parse_version_id")?
+                    != Some(bridge.final_parse_version_id.clone())
+                || required_string(&progress, "publication_parse_version_id")?
+                    != bridge.final_parse_version_id
+                || optional_string(&progress, "publication_parent_parse_version_id")?
+                    != bridge.base_parent_parse_version_id
+            {
+                return Err(error(
+                    ErrorCode::StaleInput,
+                    "Material completion checkpoint is out of order",
+                ));
+            }
+            validate_publication_list(
+                &progress,
+                &bridge,
+                Some(&bridge.final_parse_version_id),
+            )?;
+            bridge.next_publication_sequence = next_sequence;
+            bridge.head_parse_version_id = Some(bridge.final_parse_version_id.clone());
+            bridge.state = "completed".into();
+            bridge.progress = progress;
+            bridge.completed_progress_hash = Some(progress_hash);
+        } else {
+            return Err(error(
+                ErrorCode::InvalidResult,
+                "Material checkpoint state is invalid",
+            ));
+        }
+        let safe_state = checkpoint_with_bridge(&task, &bridge)?;
+        TaskManager::new(self.store.clone()).checkpoint_material(TaskCheckpointInput {
+            task_id: task.task_id,
+            attempt,
+            cursor: format!("material-checkpoint:{}", bridge.next_publication_sequence),
+            safe_state,
+        })
+    }
+
+    /// Confirm the completed response against the staged checkpoint, then use
+    /// the existing atomic publication gate for the final immutable manifest.
+    pub fn accept_completed(
+        &self,
+        input: MaterialPageResultInput,
+        payload: &Value,
+    ) -> Result<Value> {
+        let progress = progress_from_payload(payload)?;
+        let (task, snapshot, bridge, _) = self.material_context(&input.task_id, &input.snapshot_id)?;
+        if bridge.state != "completed"
+            || bridge.completed_progress_hash.as_deref() != Some(canonical_hash(&progress).as_str())
+        {
+            return Err(error(
+                ErrorCode::StaleInput,
+                "Completed material response has no matching checkpoint",
+            ));
+        }
+        let next_sequence = validate_progress_base(&progress, &task, &snapshot, &bridge, "completed")?;
+        if next_sequence != bridge.next_publication_sequence
+            || optional_string(&progress, "head_parse_version_id")?
+                != Some(bridge.final_parse_version_id.clone())
+            || input.manifest.parse_version_id != bridge.final_parse_version_id
+        {
+            return Err(error(
+                ErrorCode::StaleInput,
+                "Completed material manifest identity changed",
+            ));
+        }
+        validate_publication_list(
+            &progress,
+            &bridge,
+            Some(&bridge.final_parse_version_id),
+        )?;
+        self.accept(input)
+    }
+
     /// The JSONL adapter passes the manifest, never a caller-supplied staging path.
     /// Resources are opened under the task's pinned staging directory capability.
     pub fn accept(&self, input: MaterialPageResultInput) -> Result<Value> {
