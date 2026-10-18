@@ -553,6 +553,16 @@ mod tests {
     }
 
     #[test]
+    fn service_assignment_update_rejects_late_provider_candidates() {
+        let mut service = AsrService::new(AsrServiceConfig { open: open(), provider_task_id: "fixture-stream-task".into(), connection_epoch: 1, attempt: 1 }).unwrap();
+        service.update_assignment_epoch(Some(2));
+        let events = vec![fixtures::streaming_task_started(), fixtures::streaming_sentence_final()];
+        let outcomes = replay_stream_events(&mut service, &events).unwrap();
+        assert!(matches!(&outcomes[0], AsrEventOutcome::TaskStarted));
+        assert!(matches!(&outcomes[1], AsrEventOutcome::Rejected(PublishDecision::StaleAssignment)));
+    }
+
+    #[test]
     fn cadence_priority_and_focaus_cancel_are_local_replay_behaviors() {
         let mut cadence = ProgressCadence::default();
         assert!(cadence.due(0, Some(100)));

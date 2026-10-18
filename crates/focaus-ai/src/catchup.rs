@@ -369,7 +369,16 @@ pub fn build_generation_request_with_binding(
     binding: &focaus_contracts::CredentialBinding,
 ) -> Result<Value, SafeError> {
     binding_matches(binding, ModelId::Qwen38Flash)?;
-    if input.snapshot.model_id != Some(ModelId::Qwen38Flash)
+    if input.snapshot.contract_version != focaus_contracts::CONTRACT_VERSION {
+        return Err(task_error(
+            ErrorCode::UnsupportedVersion,
+            "focaus_contract_version_unsupported",
+            false,
+        ));
+    }
+    if input.snapshot.purpose != TaskKind::Catchup
+        || input.snapshot.prompt_version.as_deref() != Some(PROMPT_FOCAUS_V2)
+        || input.snapshot.model_id != Some(ModelId::Qwen38Flash)
         || input.snapshot.region.as_deref() != Some(models::REGION)
     {
         return Err(invalid_argument("focaus_generation_model_mismatch"));
@@ -484,6 +493,12 @@ mod tests {
         assert!(body.to_string().find("credential").is_none());
         let wrong_binding = crate::binding_for_model(ModelId::DecisionModelPreview);
         assert_eq!(build_generation_request_with_binding(&input(), &wrong_binding).unwrap_err().code, ErrorCode::InvalidArgument);
+        let mut wrong_prompt = input();
+        wrong_prompt.snapshot.prompt_version = Some("old_prompt".into());
+        assert_eq!(build_generation_request(&wrong_prompt).unwrap_err().code, ErrorCode::InvalidArgument);
+        let mut old_contract = input();
+        old_contract.snapshot.contract_version = "1.0.0".into();
+        assert_eq!(build_generation_request(&old_contract).unwrap_err().code, ErrorCode::UnsupportedVersion);
     }
 
     #[test]

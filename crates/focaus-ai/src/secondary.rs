@@ -131,6 +131,8 @@ pub fn validate_secondary_snapshot(snapshot: &InputSnapshot) -> Result<(), SafeE
         || snapshot.model_id != Some(ModelId::Qwen38Flash)
         || snapshot.region.as_deref() != Some(models::REGION)
         || snapshot.prompt_version.as_deref() != Some(PROMPT_SECONDARY_V1)
+        || snapshot.recording_id.is_none()
+        || snapshot.target_base_revision.is_none()
         || snapshot.language_tier.is_some_and(|tier| !(1..=5).contains(&tier))
     {
         return Err(invalid_argument("secondary_snapshot_binding_mismatch"));
@@ -1061,6 +1063,12 @@ pub fn build_secondary_request_with_binding(
     validate_secondary_snapshot(snapshot)?;
     crate::binding_matches(binding, ModelId::Qwen38Flash)?;
     validate_raw_units_for_request(raw_text)?;
+    if raw_text
+        .iter()
+        .any(|unit| snapshot.recording_id.as_deref() != Some(unit.recording_id.as_str()))
+    {
+        return Err(stale("secondary_request_recording_stale"));
+    }
     Ok(crate::transport::build_chat_completion_body(
         models::MULTIMODAL,
         PROMPT_SECONDARY_V1,
@@ -1111,7 +1119,7 @@ mod tests {
     }
 
     fn secondary_snapshot(model: ModelId) -> InputSnapshot {
-        InputSnapshot { snapshot_id: "snap".into(), parent_snapshot_id: None, contract_version: "2.0.0".into(), purpose: TaskKind::Secondary, target_id: "rec".into(), lesson_id: None, recording_id: Some("rec".into()), assignment_epoch: Some(1), sources: vec![source()], attachment_set_revision: "attach".into(), fact_set_revision: None, target_base_revision: None, edit_revision: None, language_tier: Some(3), evidence_cutoff: vec![EvidenceCutoff { recording_id: "rec".into(), end_ms: Some(10), status: EvidenceCutoffStatus::Known }], available_at: "2026-01-01T00:00:00Z".into(), executor_id: "ai".into(), executor_version: "1".into(), model_id: Some(model), region: Some("cn-beijing".into()), prompt_version: Some(PROMPT_SECONDARY_V1.into()), parameters_hash: "p".into(), calibration_seq: None, decision_seq: None }
+        InputSnapshot { snapshot_id: "snap".into(), parent_snapshot_id: None, contract_version: "2.0.0".into(), purpose: TaskKind::Secondary, target_id: "rec".into(), lesson_id: None, recording_id: Some("rec".into()), assignment_epoch: Some(1), sources: vec![source()], attachment_set_revision: "attach".into(), fact_set_revision: None, target_base_revision: Some("secondary-rev-1".into()), edit_revision: None, language_tier: Some(3), evidence_cutoff: vec![EvidenceCutoff { recording_id: "rec".into(), end_ms: Some(10), status: EvidenceCutoffStatus::Known }], available_at: "2026-01-01T00:00:00Z".into(), executor_id: "ai".into(), executor_version: "1".into(), model_id: Some(model), region: Some("cn-beijing".into()), prompt_version: Some(PROMPT_SECONDARY_V1.into()), parameters_hash: "p".into(), calibration_seq: None, decision_seq: None }
     }
 
     #[test]
@@ -1137,6 +1145,15 @@ mod tests {
         let mut unknown_tier = secondary_snapshot(ModelId::Qwen38Flash);
         unknown_tier.language_tier = Some(6);
         assert_eq!(validate_secondary_snapshot(&unknown_tier).unwrap_err().code, focaus_contracts::ErrorCode::InvalidArgument);
+        let mut missing_revision = secondary_snapshot(ModelId::Qwen38Flash);
+        missing_revision.target_base_revision = None;
+        assert_eq!(validate_secondary_snapshot(&missing_revision).unwrap_err().code, focaus_contracts::ErrorCode::InvalidArgument);
+        let mut missing_recording = secondary_snapshot(ModelId::Qwen38Flash);
+        missing_recording.recording_id = None;
+        assert_eq!(validate_secondary_snapshot(&missing_recording).unwrap_err().code, focaus_contracts::ErrorCode::InvalidArgument);
+        let mut wrong_recording_unit = unit("it works");
+        wrong_recording_unit.recording_id = "other-recording".into();
+        assert_eq!(build_secondary_request(&secondary_snapshot(ModelId::Qwen38Flash), &[wrong_recording_unit]).unwrap_err().code, focaus_contracts::ErrorCode::StaleInput);
     }
 
     #[test]

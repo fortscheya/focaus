@@ -9,7 +9,7 @@ use crate::{binding_matches, cancelled, compact_text, invalid, invalid_argument,
 use focaus_contracts::{
     AsrRawCandidate, AsrRawCandidateState, AsrStreamOpen, AudioChunk, AudioSpan, CredentialBinding,
     ErrorCode, HostServices, InputSnapshot, ModelId, RemoteBinding, ResultSubmitInput, SafeError,
-    SourceRef, Task, TaskCheckpointInput, TimeMapping, TimelineRange,
+    SourceRef, Task, TaskCheckpointInput, TaskKind, TimeMapping, TimelineRange,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -55,14 +55,20 @@ pub fn validate_stream_open(open: &AsrStreamOpen) -> Result<(), SafeError> {
             false,
         ));
     }
-    if open.snapshot.model_id != Some(ModelId::QwenAudio31AsrFlashStreaming)
+    if open.snapshot.purpose != TaskKind::AsrStream
+        || open.snapshot.model_id != Some(ModelId::QwenAudio31AsrFlashStreaming)
         || open.snapshot.region.as_deref() != Some(models::REGION)
         || open.snapshot.prompt_version.as_deref() != Some(crate::PROMPT_ASR_STREAM_V1)
     {
         return Err(invalid_argument("stream_snapshot_model_or_region_mismatch"));
     }
     binding_matches(&open.binding, ModelId::QwenAudio31AsrFlashStreaming)?;
-    if open.task_id.is_empty() || open.sample_rate == 0 || open.channels != 1 {
+    if open.task_id.is_empty()
+        || open.snapshot.recording_id.is_none()
+        || open.snapshot.assignment_epoch.is_none()
+        || open.sample_rate == 0
+        || open.channels != 1
+    {
         return Err(invalid_argument("invalid_stream_open"));
     }
     if open.mapping.segments.is_empty() {
@@ -424,13 +430,21 @@ pub struct FileTransRequest {
 }
 
 pub fn validate_filetrans_request(request: &FileTransRequest) -> Result<(), SafeError> {
-    if request.snapshot.model_id != Some(ModelId::QwenAudio31AsrFlashFiletrans)
+    if request.snapshot.contract_version != focaus_contracts::CONTRACT_VERSION
+        || request.snapshot.purpose != TaskKind::AsrFile
+        || request.snapshot.model_id != Some(ModelId::QwenAudio31AsrFlashFiletrans)
         || request.snapshot.region.as_deref() != Some(models::REGION)
+        || request.snapshot.prompt_version.as_deref() != Some(crate::PROMPT_ASR_FILE_V1)
     {
         return Err(invalid_argument("filetrans_snapshot_model_or_region_mismatch"));
     }
     binding_matches(&request.binding, ModelId::QwenAudio31AsrFlashFiletrans)?;
-    if request.local_task_id.is_empty() || request.local_request_segment_id.is_empty() {
+    if request.attempt == 0
+        || request.snapshot.recording_id.is_none()
+        || request.snapshot.assignment_epoch.is_none()
+        || request.local_task_id.is_empty()
+        || request.local_request_segment_id.is_empty()
+    {
         return Err(invalid_argument("filetrans_local_task_identity_required"));
     }
     if !(request.file_url.starts_with("https://") || request.file_url.starts_with("http://") || request.file_url.starts_with("oss://")) {
@@ -538,6 +552,9 @@ pub fn build_stream_request_envelope(
     provider_task_id: &str,
     attempt: u64,
 ) -> Result<StreamingRequestEnvelope, SafeError> {
+    if attempt == 0 {
+        return Err(invalid_argument("asr_attempt_must_be_positive"));
+    }
     Ok(StreamingRequestEnvelope {
         local_task_id: open.task_id.clone(),
         attempt,
@@ -576,6 +593,9 @@ pub fn plan_retry(
     binding: &CredentialBinding,
 ) -> Result<RetryPlan, SafeError> {
     binding_matches(binding, binding.model_id.clone())?;
+    if current_attempt == 0 || max_attempts == 0 || current_attempt > max_attempts {
+        return Err(invalid_argument("asr_retry_attempt_bounds_invalid"));
+    }
     if !error.retryable || matches!(error.code, ErrorCode::AuthRequired | ErrorCode::InvalidArgument | ErrorCode::UnsupportedVersion) {
         return Ok(RetryPlan::Fail);
     }
@@ -623,7 +643,13 @@ pub fn build_asr_result_submission(
     candidate: &AsrRawCandidate,
     source_refs: Vec<SourceRef>,
 ) -> Result<ResultSubmitInput, SafeError> {
-    if candidate.task_id.is_empty() || candidate.snapshot_id.is_empty() || candidate.attempt == 0 {
+    if candidate.task_id.is_empty()
+        || candidate.snapshot_id.is_empty()
+        || candidate.attempt == 0
+        || candidate.remote_binding.provider != "bailian"
+        || candidate.remote_binding.provider_task_id.is_empty()
+        || candidate.remote_binding.local_request_segment_id != candidate.task_id
+    {
         return Err(invalid_argument("asr_result_identity_required"));
     }
     if source_refs.is_empty() {
@@ -661,6 +687,8 @@ pub fn build_asr_result_submission_for_open(
     if candidate.task_id != open.task_id
         || candidate.snapshot_id != open.snapshot.snapshot_id
         || candidate.mapping_revision_id != open.mapping.mapping_revision_id
+        || candidate.remote_binding.provider != "bailian"
+        || candidate.remote_binding.local_request_segment_id != open.task_id
     {
         return Err(stale("asr_result_open_identity_mismatch"));
     }
@@ -1029,14 +1057,22 @@ mod tests {
         let mut old_contract = open();
         old_contract.snapshot.contract_version = "1.0.0".into();
         assert_eq!(validate_stream_open(&old_contract).unwrap_err().code, ErrorCode::UnsupportedVersion);
+        let mut missing_recording = open();
+        missing_recording.snapshot.recording_id = None;
+        assert_eq!(validate_stream_open(&missing_recording).unwrap_err().code, ErrorCode::InvalidArgument);
+        let mut missing_assignment = open();
+        missing_assignment.snapshot.assignment_epoch = None;
+        assert_eq!(validate_stream_open(&missing_assignment).unwrap_err().code, ErrorCode::InvalidArgument);
     }
 
     #[test]
     fn filetrans_uses_only_its_own_model_and_slot() {
+        let mut file_snapshot = snapshot(ModelId::QwenAudio31AsrFlashFiletrans, TaskKind::AsrFile);
+        file_snapshot.prompt_version = Some(crate::PROMPT_ASR_FILE_V1.into());
         let request = FileTransRequest {
             local_task_id: "file-task".into(),
             attempt: 1,
-            snapshot: snapshot(ModelId::QwenAudio31AsrFlashFiletrans, TaskKind::AsrFile),
+            snapshot: file_snapshot,
             binding: crate::binding_for_model(ModelId::QwenAudio31AsrFlashFiletrans),
             local_request_segment_id: "segment".into(),
             audio_span: AudioSpan {
@@ -1056,6 +1092,9 @@ mod tests {
         let mut wrong_slot = request.clone();
         wrong_slot.binding = crate::binding_for_model(ModelId::QwenAudio31AsrFlashStreaming);
         assert_eq!(validate_filetrans_request(&wrong_slot).unwrap_err().code, ErrorCode::InvalidArgument);
+        let mut wrong_prompt = request.clone();
+        wrong_prompt.snapshot.prompt_version = Some(crate::PROMPT_ASR_STREAM_V1.into());
+        assert_eq!(validate_filetrans_request(&wrong_prompt).unwrap_err().code, ErrorCode::InvalidArgument);
     }
 
     #[test]
@@ -1096,6 +1135,9 @@ mod tests {
         let mut wrong_open = open();
         wrong_open.binding = crate::binding_for_model(ModelId::Qwen38Flash);
         assert_eq!(build_asr_result_submission_for_open(&wrong_open, &candidate, vec![source]).unwrap_err().code, ErrorCode::InvalidArgument);
+        let mut wrong_provider = candidate.clone();
+        wrong_provider.remote_binding.provider = "other-provider".into();
+        assert_eq!(build_asr_result_submission_for_open(&open(), &wrong_provider, vec![]).unwrap_err().code, ErrorCode::InvalidArgument);
     }
 
     #[test]
@@ -1118,6 +1160,8 @@ mod tests {
         let mut wrong_binding = binding.clone();
         wrong_binding.credential_ref = focaus_contracts::CredentialRef::BailianBeijingMultimodal;
         assert_eq!(plan_retry(&task_error(ErrorCode::NetworkUnavailable, "temporary", true), 1, 3, &wrong_binding).unwrap_err().code, ErrorCode::InvalidArgument);
+        assert_eq!(plan_retry(&task_error(ErrorCode::NetworkUnavailable, "bad-attempt", true), 0, 3, &binding).unwrap_err().code, ErrorCode::InvalidArgument);
+        assert_eq!(plan_retry(&task_error(ErrorCode::NetworkUnavailable, "bad-max", true), 1, 0, &binding).unwrap_err().code, ErrorCode::InvalidArgument);
     }
 
     #[test]
@@ -1142,6 +1186,7 @@ mod tests {
         assert_eq!(envelope.attempt, 2);
         assert_eq!(envelope.binding.credential_ref, crate::binding_for_model(ModelId::QwenAudio31AsrFlashStreaming).credential_ref);
         assert_eq!(envelope.provider_message["payload"]["model"], STREAMING_MODEL_ID);
+        assert_eq!(build_stream_request_envelope(&open(), "remote-123", 0).unwrap_err().code, ErrorCode::InvalidArgument);
         assert_eq!(body["payload"]["parameters"]["sample_rate"], 16_000);
         assert!(body["payload"]["parameters"].get("channels").is_none());
         assert_eq!(build_stream_finish_task("remote-123").unwrap()["payload"]["input"], serde_json::json!({}));
