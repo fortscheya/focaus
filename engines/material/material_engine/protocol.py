@@ -44,6 +44,14 @@ class EngineProtocol:
         return _response(request_id, task_id, "error", {"error": error.as_safe_error(), "engine_build": ENGINE_BUILD})
 
     def _dispatch(self, request: Mapping[str, Any], emit: ResponseSink) -> None:
+        request_id_raw = request.get("request_id")
+        if not is_uuid(request_id_raw):
+            raise EngineError(
+                "INVALID_ARGUMENT",
+                "request_id must be a UUID",
+                scope="command",
+                details={"request_id": str(request_id_raw)},
+            )
         request_id, task_id = self._request_ids(request)
         if request.get("contract_version") != CONTRACT_VERSION:
             raise EngineError("UNSUPPORTED_VERSION", "engine accepts contract version 2.0.0 only", scope="command")

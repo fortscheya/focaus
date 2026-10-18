@@ -8,7 +8,7 @@ import sys
 import threading
 from typing import Any
 
-from .common import is_uuid
+from .common import CONTRACT_VERSION, is_uuid
 from .errors import EngineError
 from .protocol import EngineProtocol
 
@@ -84,6 +84,10 @@ def main() -> int:
             continue
         if not isinstance(request, dict):
             write(protocol.error_response(request, EngineError("INVALID_ARGUMENT", "EngineRequest must be an object", scope="command")))
+            continue
+        if request.get("contract_version") != CONTRACT_VERSION or not is_uuid(request.get("request_id")):
+            for response in protocol.handle(request):
+                write(response)
             continue
         name = request.get("name")
         if name in ("convert", "resume"):

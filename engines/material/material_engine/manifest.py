@@ -18,6 +18,7 @@ from .common import (
     is_uuid,
     safe_relative_path,
     sha256_bytes,
+    text_hash,
 )
 from .errors import EngineError
 from .models import PageDraft
@@ -160,6 +161,79 @@ def _all_ids(manifest: dict) -> List[str]:
     return values
 
 
+def _invalid_result(message: str, *, scope: str = "page", details: Optional[dict] = None) -> None:
+    raise EngineError("INVALID_RESULT", message, scope=scope, details=details)
+
+
+def _validate_material_selector(
+    selector: dict,
+    *,
+    manifest: dict,
+    page_ids: set,
+    region_by_id: dict,
+    object_ids: set,
+    owner_entity_id: Optional[str] = None,
+) -> None:
+    kind = selector.get("kind")
+    if kind == "material_region":
+        if (
+            selector.get("material_id") != manifest["material_id"]
+            or selector.get("source_version_id") != manifest["source_version_id"]
+            or selector.get("parse_version_id") != manifest["parse_version_id"]
+        ):
+            _invalid_result("material selector escaped the published source snapshot")
+        page_id = selector.get("page_id")
+        region_id = selector.get("region_id")
+        region = region_by_id.get(region_id)
+        if page_id not in page_ids or region is None or region.get("page_id") != page_id:
+            _invalid_result("material selector page or region is outside the package")
+    elif kind == "object":
+        object_id = selector.get("object_id")
+        if object_id not in object_ids:
+            _invalid_result("object selector owner is outside the package")
+        if owner_entity_id is not None and object_id != owner_entity_id:
+            _invalid_result("object selector owner does not match its anchor")
+    elif kind not in ("audio", "text", "whole"):
+        _invalid_result("material output contains an unknown selector kind")
+
+
+def _validate_source_ref(
+    source: dict,
+    *,
+    manifest: dict,
+    page_ids: set,
+    region_by_id: dict,
+    object_ids: set,
+) -> None:
+    if (
+        source.get("entity_id") != manifest["material_id"]
+        or source.get("revision_id") != manifest["source_version_id"]
+        or source.get("content_hash") != manifest["source_hash"]
+    ):
+        _invalid_result("material source reference escaped its original source", scope="asset")
+    selector = source.get("selector")
+    if not isinstance(selector, dict):
+        _invalid_result("material source reference has no selector", scope="asset")
+    _validate_material_selector(
+        selector,
+        manifest=manifest,
+        page_ids=page_ids,
+        region_by_id=region_by_id,
+        object_ids=object_ids,
+    )
+
+
+def _iter_source_refs(value):
+    if isinstance(value, dict):
+        if {"entity_id", "revision_id", "content_hash", "selector"} <= set(value):
+            yield value
+        for nested in value.values():
+            yield from _iter_source_refs(nested)
+    elif isinstance(value, list):
+        for nested in value:
+            yield from _iter_source_refs(nested)
+
+
 def validate_manifest(manifest: dict, staging_root: Path, *, check_resources: bool = True) -> None:
     required = {
         "format", "format_version", "material_id", "source_version_id", "parse_version_id",
@@ -172,22 +246,34 @@ def validate_manifest(manifest: dict, staging_root: Path, *, check_resources: bo
         raise EngineError("INVALID_RESULT", "manifest is missing required fields", scope="asset", details={"fields": ",".join(missing)})
     if manifest["format"] != MATERIAL_FORMAT or manifest["format_version"] != MATERIAL_FORMAT_VERSION:
         raise EngineError("UNSUPPORTED_VERSION", "manifest format version is not focaus.material/2.0.0", scope="asset")
+    source_page_indices = [page.get("source_page_index") for page in manifest["pages"]]
+    if len(source_page_indices) != len(set(source_page_indices)):
+        _invalid_result("manifest contains duplicate source page indices", scope="asset")
     ids = _all_ids(manifest)
     if len(ids) != len(set(ids)):
         raise EngineError("INVALID_RESULT", "manifest contains duplicate page/region/object/resource IDs", scope="asset")
     page_ids = {page["page_id"] for page in manifest["pages"]}
     region_ids = {region["region_id"] for region in manifest["regions"]}
+    region_by_id = {region["region_id"]: region for region in manifest["regions"]}
     object_ids = {obj["object_id"] for obj in manifest["objects"]}
     resource_ids = {resource["resource_id"] for resource in manifest["resources"]}
+    allowed_resource_owners = page_ids | region_ids | object_ids | {manifest["material_id"]}
+    relative_paths = set()
     if check_resources:
         for resource in manifest["resources"]:
             relative = safe_relative_path(resource["relative_path"])
+            if relative in relative_paths:
+                _invalid_result("manifest resources reuse a relative path", scope="asset", details={"relative_path": relative})
+            relative_paths.add(relative)
             path = ensure_within(staging_root, staging_root / relative, field_name="resource")
             if not path.is_file():
                 raise EngineError("INVALID_RESULT", "manifest resource is missing", scope="asset", details={"resource_id": resource["resource_id"]})
             data = path.read_bytes()
             if len(data) != resource["byte_length"] or sha256_bytes(data) != resource["sha256"]:
                 raise EngineError("INVALID_RESULT", "manifest resource hash or length mismatch", scope="asset", details={"resource_id": resource["resource_id"]})
+    for resource in manifest["resources"]:
+        if not set(resource.get("owner_refs", [])) <= allowed_resource_owners:
+            _invalid_result("resource owner is outside the package", scope="asset", details={"resource_id": resource["resource_id"]})
     for page in manifest["pages"]:
         if page.get("preview_resource_id") is not None and page["preview_resource_id"] not in resource_ids:
             raise EngineError("INVALID_RESULT", "page preview resource is outside package", scope="page")
@@ -203,12 +289,64 @@ def validate_manifest(manifest: dict, staging_root: Path, *, check_resources: bo
             raise EngineError("INVALID_RESULT", "object closure is incomplete", scope="page", details={"object_id": obj["object_id"]})
         if obj.get("type") == "image" and obj.get("content", {}).get("resource_id") not in resource_ids:
             raise EngineError("INVALID_RESULT", "image resource is missing", scope="page", details={"object_id": obj["object_id"]})
+        for source in _iter_source_refs(obj):
+            _validate_source_ref(
+                source,
+                manifest=manifest,
+                page_ids=page_ids,
+                region_by_id=region_by_id,
+                object_ids=object_ids,
+            )
     for unit in manifest["search_units"]:
         if unit.get("owner_entity_id") not in object_ids:
             raise EngineError("INVALID_RESULT", "search unit owner is missing", scope="page")
-        anchor = unit.get("anchor", {})
-        if anchor.get("owner_entity_id") != unit.get("owner_entity_id"):
-            raise EngineError("INVALID_RESULT", "search anchor owner does not match unit", scope="page")
+        display_text = unit.get("display_text")
+        if not isinstance(display_text, str):
+            _invalid_result("search unit display text is not a string")
+        if unit.get("content_hash") != text_hash(display_text):
+            _invalid_result("search unit text hash does not match its display text")
+        alternate_anchors = unit.get("alternate_anchors", [])
+        if not isinstance(alternate_anchors, list):
+            _invalid_result("search unit alternate anchors are not a list")
+        anchors = [unit.get("anchor")] + alternate_anchors
+        for anchor in anchors:
+            if not isinstance(anchor, dict):
+                _invalid_result("search unit contains an invalid anchor")
+            if (
+                anchor.get("owner_entity_id") != unit.get("owner_entity_id")
+                or anchor.get("revision_id") != unit.get("revision_id")
+            ):
+                _invalid_result("search anchor owner or revision does not match unit")
+            scalar_range = anchor.get("scalar_range", {})
+            start = scalar_range.get("start")
+            end = scalar_range.get("end")
+            if (
+                not isinstance(start, int)
+                or not isinstance(end, int)
+                or start < 0
+                or end < start
+                or end > len(display_text)
+            ):
+                _invalid_result("search anchor scalar range is outside its display text")
+            selector = anchor.get("selector")
+            if not isinstance(selector, dict):
+                _invalid_result("search anchor contains no selector")
+            _validate_material_selector(
+                selector,
+                manifest=manifest,
+                page_ids=page_ids,
+                region_by_id=region_by_id,
+                object_ids=object_ids,
+                owner_entity_id=unit.get("owner_entity_id"),
+            )
+    for source in _iter_source_refs(manifest.get("provenance", {})):
+        _validate_source_ref(
+            source,
+            manifest=manifest,
+            page_ids=page_ids,
+            region_by_id=region_by_id,
+            object_ids=object_ids,
+        )
     coverage = manifest["search_coverage"]
     if not set(coverage.get("requested_pages", [])) <= page_ids or not set(coverage.get("processed_pages", [])) <= page_ids:
         raise EngineError("INVALID_RESULT", "search coverage page closure is incomplete", scope="page")
@@ -263,6 +401,8 @@ def validate_snapshot_header(
     *,
     parse_version_id: str,
     material_id: str,
+    source_version_id: Optional[str] = None,
+    source_hash: Optional[str] = None,
 ) -> None:
     if not isinstance(manifest, dict):
         raise EngineError("CORRUPT_ASSET", "parent snapshot is not an object", scope="asset")
@@ -272,6 +412,10 @@ def validate_snapshot_header(
         raise EngineError("IDEMPOTENCY_MISMATCH", "parent snapshot ID does not match the requested parent", scope="task")
     if manifest.get("material_id") != material_id:
         raise EngineError("CONFLICT", "parent snapshot belongs to another material", scope="asset")
+    if source_version_id is not None and manifest.get("source_version_id") != source_version_id:
+        raise EngineError("STALE_INPUT", "parent snapshot belongs to another source version", scope="asset")
+    if source_hash is not None and manifest.get("source_hash") != source_hash:
+        raise EngineError("STALE_INPUT", "parent snapshot was created from another source", scope="asset")
 
 
 def write_snapshot(

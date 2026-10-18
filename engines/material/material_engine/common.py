@@ -142,9 +142,11 @@ class IdentityAllocator:
     def unique_id(self, kind: str, key: str, existing: Iterable[str]) -> str:
         """Allocate a publication identity, preferring a host pool entry.
 
-        Parse snapshots are publication events, so an engine fallback uses a
-        random UUID and records the candidate rather than deriving an ID from
-        a page number or file name.  A host supplied value remains authoritative.
+        Parse snapshots are publication events, so an engine fallback derives a
+        request-scoped UUID from the task and sequence key and records it as a
+        candidate.  This keeps recovery idempotent when a process stops after
+        publishing a snapshot but before flushing its checkpoint.  A host
+        supplied value remains authoritative.
         """
         existing_set = {str(value) for value in existing}
         pooled = self._pool_value(kind, key)
@@ -158,9 +160,11 @@ class IdentityAllocator:
                 )
             self._resolved[(str(kind), str(key))] = pooled
             return pooled
-        for _ in range(16):
-            candidate = str(uuid.uuid4())
+        for attempt in range(16):
+            suffix = "{}:{}".format(kind, key) if attempt == 0 else "{}:{}:{}".format(kind, key, attempt)
+            candidate = str(uuid.uuid5(self.namespace, suffix))
             if candidate not in existing_set:
+                self._resolved[(str(kind), str(key))] = candidate
                 self._candidate_keys.append("{}:{}".format(kind, key))
                 return candidate
         raise EngineError("IDEMPOTENCY_MISMATCH", "could not allocate a unique publication ID", scope="task")
@@ -199,10 +203,15 @@ def ensure_within(root: Path, candidate: Path, *, field_name: str) -> Path:
 
 
 def safe_relative_path(path: str) -> str:
-    path = str(path).replace("\\", "/")
-    if path.startswith("/") or path.startswith("../") or "/../" in path or path == "..":
+    path = str(path)
+    if "\\" in path:
+        raise EngineError("INVALID_ARGUMENT", "resource path contains a backslash", scope="asset")
+    if path.startswith("/"):
         raise EngineError("INVALID_ARGUMENT", "resource path escapes package root", scope="asset")
-    if any(part in ("", ".") for part in path.split("/")):
+    parts = path.split("/")
+    if ".." in parts:
+        raise EngineError("INVALID_ARGUMENT", "resource path escapes package root", scope="asset")
+    if any(part in ("", ".") for part in parts):
         raise EngineError("INVALID_ARGUMENT", "resource path contains an empty component", scope="asset")
     return path
 
@@ -256,10 +265,21 @@ class ResourceStore:
         resource_id = self.ids.id("resource", key)
         extension = _MEDIA_EXTENSIONS.get(media_type) or mimetypes.guess_extension(media_type) or ".bin"
         relative_path = safe_relative_path("resources/{}{}".format(resource_id, extension))
-        destination = self.staging_root / relative_path
+        destination = ensure_within(
+            self.staging_root,
+            self.staging_root / relative_path,
+            field_name="resource",
+        )
         destination.parent.mkdir(parents=True, exist_ok=True)
         existing_record = self._records.get(resource_id)
-        if existing_record is not None and destination.is_file():
+        if destination.exists():
+            if not destination.is_file():
+                raise EngineError(
+                    "CORRUPT_ASSET",
+                    "resource destination is not a regular file",
+                    scope="asset",
+                    details={"resource_id": resource_id},
+                )
             existing_data = destination.read_bytes()
             if existing_data != data:
                 raise EngineError(
@@ -268,7 +288,19 @@ class ResourceStore:
                     scope="asset",
                     details={"resource_id": resource_id},
                 )
-            existing_record["owner_refs"] = list(dict.fromkeys(existing_record.get("owner_refs", []) + owner_refs))
+            if existing_record is None:
+                existing_record = {
+                    "resource_id": resource_id,
+                    "media_type": media_type,
+                    "byte_length": len(data),
+                    "sha256": sha256_bytes(data),
+                    "relative_path": relative_path,
+                    "role": role,
+                    "owner_refs": owner_refs,
+                }
+                self._records[resource_id] = existing_record
+            else:
+                existing_record["owner_refs"] = list(dict.fromkeys(existing_record.get("owner_refs", []) + owner_refs))
             self._key_to_id[key] = resource_id
             self._bytes_by_key[key] = data
             return resource_id

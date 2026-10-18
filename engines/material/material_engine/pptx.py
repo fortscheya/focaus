@@ -442,7 +442,6 @@ def _chart_object(
     series_elements = _descendants(root, "ser")
     for series_index, series in enumerate(series_elements):
         name = _chart_series_name(series) or "Series {}".format(series_index + 1)
-        name_id = ctx.ids.id("chart_label", "{}:{}:name".format(page_index, shape_key, series_index))
         cat = _first(series, "cat")
         val = _first(series, "val")
         categories = _cache_values(cat)
@@ -474,7 +473,8 @@ def _chart_object(
                     "basis": "pptx_chart_cache" if y_value is not None else "chart_value_missing",
                 }
             )
-        series_values.append({"series_id": ctx.ids.id("chart_series", "{}:{}:{}".format(page_index, shape_key, series_index)), "name": name, "points": points})
+        series_id = ctx.ids.id("chart_series", "{}:{}:{}".format(page_index, shape_key, series_index))
+        series_values.append({"series_id": series_id, "name": name, "points": points})
         add_search_unit(
             ctx,
             draft.search_units,
@@ -485,7 +485,7 @@ def _chart_object(
             },
             text=name,
             field_path="content.series[{}].name".format(series_index),
-            element_ids=[name_id],
+            element_ids=[series_id],
             page_id=page_id,
             region_id=region_id,
             bbox=bounds,
@@ -763,7 +763,7 @@ def _page_draft(
                 draft.page["reading_order"].append(object_id)
                 shape_objects[shape_id] = object_value
                 if description:
-                    add_search_unit(ctx, draft.search_units, page_index=page_index, object_value=object_value, text=description, field_path="content.alt", element_ids=[ctx.ids.id("element", "{}:alt".format(shape_key))], page_id=page_id, region_id=region_id, bbox=bounds, equivalence_group_id="eq:{}:{}:alt".format(page_id, shape_key))
+                    add_search_unit(ctx, draft.search_units, page_index=page_index, object_value=object_value, text=description, field_path="content.alt", element_ids=[object_id], page_id=page_id, region_id=region_id, bbox=bounds, equivalence_group_id="eq:{}:{}:alt".format(page_id, shape_key))
             elif target and target[1]:
                 page["errors"].append(safe_error("UNSUPPORTED_CAPABILITY", "external image target was not fetched", scope="page", details={"reason": "external_target"}))
             z_order += 1

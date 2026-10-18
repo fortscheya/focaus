@@ -31,7 +31,11 @@ manifest provenance 中标为 `engine_candidate_requires_host_confirmation`，�
 `manifest_path`，对应 `staging_handle/snapshots/<parse_version_id>.json`；文件只
 能创建一次，`parent_parse_version_id` 必须先存在。请求中的 `parse_version_id`
 保留给最终快照，`manifest.json` 只是可替换的恢复/head 副本，不能作为历史快照
-身份。单页解析、渲染
+身份。`page_result` 顶层同时携带 `material_id`、`source_version_id`、`source_hash`，
+以及当前页的 `page`、`regions`、`objects`、`resources` 和 `search_units` 闭包；
+这些页级字段与其 `snapshot_parse_version_id` 使用同一组锚点。page checkpoint
+之间的父链只用于 sidecar 恢复；`completed` 的最终 manifest 始终保留宿主已经
+确认的 `parent_parse_version_id`，不会把内部 checkpoint 当成宿主父版本。单页解析、渲染
 或对象重构失败会保留该页的 `failed` 或 `partial` 状态并继续其他页；只有输入
 不可读、版本不兼容、staging 越界等全局错误才返回 task-level error。`resume` 使用
 同一 staging 目录里的 checkpoint 跳过已完成页；`retry_pages` 可在 payload 中

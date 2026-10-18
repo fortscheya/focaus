@@ -12,9 +12,10 @@ import zipfile
 from pathlib import Path
 from unittest import TestCase
 
-from material_engine.common import content_hash, safe_relative_path
-from material_engine.engine import MaterialEngine
+from material_engine.common import IdentityAllocator, ResourceStore, content_hash, safe_relative_path
+from material_engine.engine import MaterialEngine, _draft_from_manifest
 from material_engine.errors import EngineError
+from material_engine.manifest import validate_manifest
 from material_engine.protocol import EngineProtocol
 
 
@@ -138,6 +139,7 @@ class MaterialEngineTests(TestCase):
         self.assertEqual(result["manifest"]["objects"][0]["content"]["runs"][0]["text"], "after")
         self.assertEqual(result["manifest"]["search_units"][0]["display_text"], "after")
         self.assertEqual(result["manifest"]["corrections_applied"][0]["replay_status"], "applied")
+        self.assertEqual(result["manifest"]["parent_parse_version_id"], values[2])
         self.assertEqual(source.read_bytes().count(b"before"), 1)
         self.assertEqual(Path(first["manifest_path"]).read_bytes(), old_snapshot_bytes)
 
@@ -155,6 +157,31 @@ class MaterialEngineTests(TestCase):
         self.assertEqual([item["manifest"]["parse_version_id"] for item in page_results], published[:2])
         self.assertEqual([len(item["manifest"]["pages"]) for item in page_results], [1, 2])
         self.assertIsNone(manifest["parent_parse_version_id"])
+        for index, page_result in enumerate(page_results):
+            publication_id = published[index]
+            self.assertEqual(page_result["parse_version_id"], publication_id)
+            self.assertEqual(page_result["snapshot_parse_version_id"], publication_id)
+            self.assertEqual(page_result["source_version_id"], values[1])
+            self.assertEqual(page_result["source_hash"], manifest["source_hash"])
+            self.assertEqual(page_result["parent_parse_version_id"], page_result["manifest"]["parent_parse_version_id"])
+            page_value = page_result["page"]
+            self.assertEqual(page_value["source_page_index"], index)
+            page_region_ids = {region["region_id"] for region in page_result["regions"]}
+            page_object_ids = {obj["object_id"] for obj in page_result["objects"]}
+            self.assertTrue(set(page_value["region_ids"]) <= page_region_ids)
+            self.assertTrue(set(page_value["reading_order"]) <= page_object_ids)
+            self.assertEqual(
+                set(material_selector_parse_versions(page_result)),
+                {publication_id},
+            )
+            page_resource_ids = {resource["resource_id"] for resource in page_result["resources"]}
+            referenced_resource_ids = {page_value["preview_resource_id"]}
+            referenced_resource_ids.update(
+                obj.get("content", {}).get("resource_id")
+                for obj in page_result["objects"]
+                if obj.get("content", {}).get("resource_id") is not None
+            )
+            self.assertTrue(referenced_resource_ids <= page_resource_ids)
         for index, parse_version_id in enumerate(published):
             snapshot_path = self.root / "publication-chain" / "snapshots" / (parse_version_id + ".json")
             self.assertTrue(snapshot_path.is_file())
@@ -183,6 +210,26 @@ class MaterialEngineTests(TestCase):
             self.engine.convert(payload, task_id=values[3])
         self.assertEqual(error.exception.code, "SOURCE_UNAVAILABLE")
         self.assertFalse((self.root / "missing-parent" / "manifest.json").exists())
+
+    def test_duplicate_requested_page_is_rejected_before_publication(self):
+        source = self.root / "duplicate-page.pdf"
+        make_pdf(source, ["page"])
+        values, payload = self.payload(source, pages=[0, 0], stage_name="duplicate-page")
+        with self.assertRaises(EngineError) as error:
+            self.engine.convert(payload, task_id=values[3])
+        self.assertEqual(error.exception.code, "INVALID_ARGUMENT")
+        self.assertFalse((self.root / "duplicate-page" / "manifest.json").exists())
+
+    def test_manifest_rejects_source_anchor_outside_published_snapshot(self):
+        source = self.root / "anchor-closure.pdf"
+        make_pdf(source, ["page"])
+        values, payload = self.payload(source, stage_name="anchor-closure")
+        result = self.engine.convert(payload, task_id=values[3])
+        manifest = json.loads(Path(result["manifest_path"]).read_text())
+        manifest["objects"][0]["source_refs"][0]["selector"]["parse_version_id"] = str(uuid.uuid4())
+        with self.assertRaises(EngineError) as error:
+            validate_manifest(manifest, self.root / "anchor-closure")
+        self.assertEqual(error.exception.code, "INVALID_RESULT")
 
     def test_resume_skips_completed_page_and_retries_remaining_page(self):
         source = self.root / "two-pages.pdf"
@@ -229,6 +276,8 @@ class MaterialEngineTests(TestCase):
         self.assertEqual(diagram["content"]["edges"][0]["status"], "known")
         search_fields = {unit["field_path"] for unit in manifest["search_units"]}
         self.assertIn("content.nodes[{}].label".format(diagram["content"]["nodes"][0]["node_id"]), search_fields)
+        chart_name_unit = next(unit for unit in manifest["search_units"] if unit["field_path"] == "content.series[0].name")
+        self.assertEqual(chart_name_unit["anchor"]["selector"]["element_ids"], [chart["content"]["series"][0]["series_id"]])
 
     def test_resume_rejects_changed_source_and_parse_version(self):
         source = self.root / "resume-guard.pdf"
@@ -245,6 +294,11 @@ class MaterialEngineTests(TestCase):
         with self.assertRaises(EngineError) as parse_changed:
             self.engine.convert(changed_parse, task_id=values[3], resume=True)
         self.assertEqual(parse_changed.exception.code, "IDEMPOTENCY_MISMATCH")
+        changed_parent = dict(payload)
+        changed_parent["parent_parse_version_id"] = str(uuid.uuid4())
+        with self.assertRaises(EngineError) as parent_changed:
+            self.engine.convert(changed_parent, task_id=values[3], resume=True)
+        self.assertEqual(parent_changed.exception.code, "IDEMPOTENCY_MISMATCH")
 
     def test_same_basename_uses_source_identity_and_image_is_partial(self):
         first = self.root / "one" / "same.pdf"
@@ -277,6 +331,62 @@ class MaterialEngineTests(TestCase):
             safe_relative_path("../outside.bin")
         with self.assertRaises(EngineError):
             safe_relative_path("resources/../../outside.bin")
+        for path in ("resources/..", "a/b/..", "a/../b", "resources\\outside.bin"):
+            with self.assertRaises(EngineError):
+                safe_relative_path(path)
+
+    def test_existing_unregistered_resource_is_never_overwritten(self):
+        staging = self.root / "resource-store"
+        ids = IdentityAllocator(str(uuid.uuid4()), str(uuid.uuid4()), {})
+        store = ResourceStore(staging, ids)
+        resource_id = ids.id("resource", "orphan")
+        destination = staging / "resources" / (resource_id + ".bin")
+        destination.write_bytes(b"old")
+        with self.assertRaises(EngineError) as error:
+            store.add_bytes("orphan", b"new", "application/octet-stream", "preview", [])
+        self.assertEqual(error.exception.code, "CORRUPT_ASSET")
+        self.assertEqual(destination.read_bytes(), b"old")
+
+    def test_invalid_request_id_is_rejected_without_silent_replacement(self):
+        protocol = EngineProtocol(self.engine)
+        response = protocol.handle(
+            {
+                "contract_version": "2.0.0",
+                "request_id": "req-123",
+                "name": "handshake",
+                "task_id": None,
+                "payload": {},
+            }
+        )[0]
+        self.assertEqual(response["kind"], "error")
+        self.assertEqual(response["payload"]["error"]["code"], "INVALID_ARGUMENT")
+        self.assertEqual(response["payload"]["error"]["details"]["request_id"], "req-123")
+
+    def test_staging_uri_and_source_overlap_are_rejected(self):
+        source = self.root / "overlap" / "source.pdf"
+        source.parent.mkdir()
+        make_pdf(source, ["page"])
+        values, payload = self.payload(source, stage_name="overlap")
+        with self.assertRaises(EngineError) as overlap:
+            self.engine.convert(payload, task_id=values[3])
+        self.assertEqual(overlap.exception.code, "INVALID_ARGUMENT")
+        values_uri, payload_uri = self.payload(self.root / "uri-source.pdf", stage_name="uri-stage")
+        make_pdf(Path(payload_uri["source_handle"]), ["page"])
+        payload_uri["staging_handle"] = "file://" + payload_uri["staging_handle"]
+        with self.assertRaises(EngineError) as uri:
+            self.engine.convert(payload_uri, task_id=values_uri[3])
+        self.assertEqual(uri.exception.code, "INVALID_ARGUMENT")
+
+    def test_resume_draft_handles_nullable_anchor_fallback(self):
+        source = self.root / "nullable-fallback.pdf"
+        make_pdf(source, ["page"])
+        values, payload = self.payload(source, stage_name="nullable-fallback")
+        manifest = self.engine.convert(payload, task_id=values[3])["manifest"]
+        for unit in manifest["search_units"]:
+            unit["anchor"]["fallback"] = None
+        draft = _draft_from_manifest(manifest, 0)
+        self.assertIsNotNone(draft)
+        self.assertEqual(len(draft.search_units), 1)
 
     def test_jsonl_subprocess_flushes_progress_cancel_and_resume(self):
         source = self.root / "process.pdf"

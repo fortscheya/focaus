@@ -103,11 +103,12 @@ def _draft_from_manifest(manifest: dict, page_index: int) -> Optional[PageDraft]
     page_regions = [region for region in manifest.get("regions", []) if region.get("page_id") == page_id]
     region_ids = {region["region_id"] for region in page_regions}
     page_objects = [obj for obj in manifest.get("objects", []) if region_ids.intersection(obj.get("region_ids", []))]
-    page_units = []
-    for unit in manifest.get("search_units", []):
-        fallback = unit.get("anchor", {}).get("fallback", "")
-        if "page:{};".format(page_id) in fallback:
-            page_units.append(unit)
+    page_object_ids = {obj["object_id"] for obj in page_objects}
+    page_units = [
+        unit
+        for unit in manifest.get("search_units", [])
+        if unit.get("owner_entity_id") in page_object_ids
+    ]
     coverage = manifest.get("search_coverage", {})
     # ``page_id=None`` entries are cumulative snapshot-level placeholders for
     # pages that had not been published yet. They must not be copied into
@@ -221,6 +222,11 @@ class MaterialEngine:
     ) -> dict:
         """Build a detached page result so later correction/reparse cannot mutate it."""
         payload = {
+            "format": manifest["format"],
+            "format_version": manifest["format_version"],
+            "material_id": manifest["material_id"],
+            "source_version_id": manifest["source_version_id"],
+            "source_hash": manifest["source_hash"],
             "parse_version_id": manifest["parse_version_id"],
             "parent_parse_version_id": manifest.get("parent_parse_version_id"),
             "snapshot_parse_version_id": manifest["parse_version_id"],
@@ -231,17 +237,71 @@ class MaterialEngine:
         if publication_sequence is not None:
             payload["publication_sequence"] = publication_sequence
         if page is not None:
+            page_value = next(
+                (value for value in manifest.get("pages", []) if value.get("page_id") == page.page_id),
+                None,
+            )
+            if page_value is None:
+                raise EngineError(
+                    "INVALID_RESULT",
+                    "page result is outside the published manifest",
+                    scope="page",
+                    details={"page_id": page.page_id},
+                )
+            page_regions = [
+                value for value in manifest.get("regions", []) if value.get("page_id") == page.page_id
+            ]
+            region_ids = {value["region_id"] for value in page_regions}
+            page_objects = [
+                value
+                for value in manifest.get("objects", [])
+                if region_ids.intersection(value.get("region_ids", []))
+            ]
+            object_ids = {value["object_id"] for value in page_objects}
+            page_search_units = [
+                value
+                for value in manifest.get("search_units", [])
+                if value.get("owner_entity_id") in object_ids
+            ]
+            owners = {page.page_id} | region_ids | object_ids
+            referenced_resources = set()
+            if page_value.get("preview_resource_id") is not None:
+                referenced_resources.add(page_value["preview_resource_id"])
+            for object_value in page_objects:
+                resource_id = object_value.get("content", {}).get("resource_id")
+                if resource_id is not None:
+                    referenced_resources.add(resource_id)
+            page_resources = [
+                value
+                for value in manifest.get("resources", [])
+                if value.get("resource_id") in referenced_resources
+                or owners.intersection(value.get("owner_refs", []))
+            ]
+            coverage = manifest.get("search_coverage", {})
             payload.update(
                 {
-                    "source_page_index": page.index,
-                    "page": deepcopy(page.page),
-                    "regions": deepcopy(page.regions),
-                    "objects": deepcopy(page.objects),
-                    "search_units": deepcopy(page.search_units),
+                    "source_page_index": page_value["source_page_index"],
+                    "page": deepcopy(page_value),
+                    "regions": deepcopy(page_regions),
+                    "objects": deepcopy(page_objects),
+                    "resources": deepcopy(page_resources),
+                    "search_units": deepcopy(page_search_units),
                     "search_coverage": {
-                        "processed": page.processed_for_search,
-                        "unprocessed": deepcopy(page.coverage_unprocessed),
-                        "failed": deepcopy(page.coverage_failed),
+                        "processed": page.page_id in set(coverage.get("processed_pages", [])),
+                        "unprocessed": deepcopy(
+                            [
+                                area
+                                for area in coverage.get("unprocessed", [])
+                                if area.get("page_id") == page.page_id
+                            ]
+                        ),
+                        "failed": deepcopy(
+                            [
+                                area
+                                for area in coverage.get("failed", [])
+                                if area.get("page_id") == page.page_id
+                            ]
+                        ),
                     },
                 }
             )
@@ -262,12 +322,22 @@ class MaterialEngine:
         staging_raw = payload.get("staging_handle")
         if not isinstance(source_raw, str) or "://" in source_raw:
             raise EngineError("INVALID_ARGUMENT", "source_handle must be a local managed file path", scope="asset")
-        if not isinstance(staging_raw, str):
+        if not isinstance(staging_raw, str) or "://" in staging_raw:
             raise EngineError("INVALID_ARGUMENT", "staging_handle must be a local directory", scope="asset")
         source_path = Path(source_raw).expanduser().resolve()
         staging_root = Path(staging_raw).expanduser().resolve()
         if not source_path.is_file():
             raise EngineError("SOURCE_UNAVAILABLE", "source_handle does not point to a readable file", retryable=True, scope="asset")
+        try:
+            source_path.relative_to(staging_root)
+        except ValueError:
+            pass
+        else:
+            raise EngineError(
+                "INVALID_ARGUMENT",
+                "source_handle must not be inside staging_handle",
+                scope="asset",
+            )
         try:
             staging_root.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
@@ -337,6 +407,36 @@ class MaterialEngine:
                 scope="task",
                 details={"expected": str(checkpoint.get("parse_version_id")), "actual": str(parse_version_id)},
             )
+        if (
+            resume
+            and checkpoint is not None
+            and "parent_parse_version_id" in checkpoint
+            and checkpoint.get("parent_parse_version_id") != parent_parse_version_id
+        ):
+            raise EngineError(
+                "IDEMPOTENCY_MISMATCH",
+                "resume parent_parse_version_id does not match the original task target",
+                scope="task",
+                details={
+                    "expected": str(checkpoint.get("parent_parse_version_id")),
+                    "actual": str(parent_parse_version_id),
+                },
+            )
+        if (
+            resume
+            and checkpoint is not None
+            and "source_version_id" in checkpoint
+            and checkpoint.get("source_version_id") != payload["source_version_id"]
+        ):
+            raise EngineError(
+                "IDEMPOTENCY_MISMATCH",
+                "resume source_version_id does not match the original task target",
+                scope="task",
+                details={
+                    "expected": str(checkpoint.get("source_version_id")),
+                    "actual": str(payload["source_version_id"]),
+                },
+            )
         if existing_head is not None:
             if existing_head.get("material_id") != payload["material_id"] or existing_head.get("source_version_id") != payload["source_version_id"]:
                 raise EngineError("CONFLICT", "staging head belongs to another material source", scope="asset")
@@ -346,7 +446,13 @@ class MaterialEngine:
         target_snapshot = read_snapshot(staging_root, parse_version_id)
         if target_snapshot is not None:
             if resume and checkpoint and checkpoint.get("state") == "completed":
-                validate_snapshot_header(target_snapshot, parse_version_id=parse_version_id, material_id=payload["material_id"])
+                validate_snapshot_header(
+                    target_snapshot,
+                    parse_version_id=parse_version_id,
+                    material_id=payload["material_id"],
+                    source_version_id=payload["source_version_id"],
+                    source_hash=source_hash,
+                )
                 validate_manifest(target_snapshot, staging_root)
                 return {
                     "manifest": target_snapshot,
@@ -371,6 +477,8 @@ class MaterialEngine:
                     parent_snapshot,
                     parse_version_id=parent_parse_version_id,
                     material_id=payload["material_id"],
+                    source_version_id=payload["source_version_id"],
+                    source_hash=source_hash,
                 )
                 validate_manifest(parent_snapshot, staging_root)
             else:
@@ -391,6 +499,8 @@ class MaterialEngine:
                     parent_snapshot,
                     parse_version_id=parent_parse_version_id,
                     material_id=payload["material_id"],
+                    source_version_id=payload["source_version_id"],
+                    source_hash=source_hash,
                 )
                 parent_root = parent_path.parent.parent if parent_path.parent.name == "snapshots" else parent_path.parent
                 validate_manifest(parent_snapshot, parent_root)
@@ -553,6 +663,8 @@ class MaterialEngine:
                     "contract_version": CONTRACT_VERSION,
                     "task_id": task_id,
                     "parse_version_id": parse_version_id,
+                    "parent_parse_version_id": parent_parse_version_id,
+                    "source_version_id": payload["source_version_id"],
                     "head_parse_version_id": head_id,
                     "published_parse_versions": list(published_parse_versions),
                     "next_publication_sequence": publication_sequence,
@@ -580,6 +692,10 @@ class MaterialEngine:
             # final product publication must point at the host's verified
             # parse parent, rather than at a transient page checkpoint that
             # the host never published.
+            # Page checkpoints are sidecar recovery publications. The host only
+            # accepts the final manifest against the parse version it verified;
+            # exposing a transient checkpoint here would make a valid reparse
+            # look stale to MaterialService.
             final_parent_id = parent_parse_version_id
             final_manifest, final_snapshot = publish_snapshot(
                 parse_version_id,
@@ -594,6 +710,8 @@ class MaterialEngine:
                 "contract_version": CONTRACT_VERSION,
                 "task_id": task_id,
                 "parse_version_id": parse_version_id,
+                "parent_parse_version_id": parent_parse_version_id,
+                "source_version_id": payload["source_version_id"],
                 "head_parse_version_id": parse_version_id,
                 "published_parse_versions": list(published_parse_versions),
                 "next_publication_sequence": publication_sequence + 1,
