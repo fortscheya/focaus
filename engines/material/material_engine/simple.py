@@ -107,13 +107,15 @@ def extract_image(ctx: ExtractionContext, requested_pages: Sequence[int], render
     draft.regions.append({"region_id": root_region_id, "page_id": page_id, "bbox": [0, 0, 1, 1], "object_ids": [], "semantic_role": "image", "parent_region_id": None})
     object_id = ctx.ids.id("object", "0:source-image")
     object_region_id = ctx.ids.id("region", "0:object:image")
+    draft.regions.append({"region_id": object_region_id, "page_id": page_id, "bbox": [0, 0, 1, 1], "object_ids": [object_id], "semantic_role": "image", "parent_region_id": root_region_id})
     media_type = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp"}.get(ctx.source_path.suffix.lower(), "application/octet-stream")
     resource_id = ctx.resources.add_bytes("source/image", data, media_type, "original_page", [page_id, object_id])
-    source = source_ref(ctx, page_id, root_region_id, [0, 0, 1, 1])
-    object_value = base_object(ctx, 0, "source-image", "image", root_region_id, [0, 0, 1, 1], source, extraction="native", editability="image_only", status="complete", content={"resource_id": resource_id, "alt": "原始图片；未执行 OCR", "crop": [0, 0, 1, 1], "width": width, "height": height})
+    source = source_ref(ctx, page_id, object_region_id, [0, 0, 1, 1])
+    object_value = base_object(ctx, 0, "source-image", "image", object_region_id, [0, 0, 1, 1], source, extraction="native", editability="image_only", status="complete", content={"resource_id": resource_id, "alt": "原始图片；未执行 OCR", "crop": [0, 0, 1, 1], "width": width, "height": height})
     draft.objects.append(object_value)
     draft.page["reading_order"].append(object_value["object_id"])
     draft.regions[0]["object_ids"].append(object_value["object_id"])
+    page["preview_resource_id"] = resource_id
     page["region_ids"] = [region["region_id"] for region in draft.regions]
     draft.coverage_unprocessed.append({"page_id": page_id, "region_id": root_region_id, "reason": "ocr_not_configured"})
     return [draft]

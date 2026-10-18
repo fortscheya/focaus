@@ -1,13 +1,20 @@
 import json
+import os
+import queue
 import shutil
+import subprocess
+import sys
 import tempfile
+import threading
+import time
 import uuid
 import zipfile
 from pathlib import Path
 from unittest import TestCase
 
-from material_engine.common import content_hash
+from material_engine.common import content_hash, safe_relative_path
 from material_engine.engine import MaterialEngine
+from material_engine.errors import EngineError
 from material_engine.protocol import EngineProtocol
 
 
@@ -136,3 +143,150 @@ class MaterialEngineTests(TestCase):
         response = protocol.handle({"contract_version": "1.0.0", "request_id": str(uuid.uuid4()), "name": "handshake", "task_id": None, "payload": {}})[0]
         self.assertEqual(response["kind"], "error")
         self.assertEqual(response["payload"]["error"]["code"], "UNSUPPORTED_VERSION")
+
+    def test_resume_rejects_changed_source_and_parse_version(self):
+        source = self.root / "resume-guard.pdf"
+        make_pdf(source, ["stable"])
+        values, payload = self.payload(source, stage_name="guard")
+        self.engine.convert(payload, task_id=values[3])
+        source.write_bytes(source.read_bytes() + b"changed")
+        with self.assertRaises(EngineError) as changed:
+            self.engine.convert(payload, task_id=values[3], resume=True)
+        self.assertIn(changed.exception.code, ("IDEMPOTENCY_MISMATCH", "STALE_INPUT"))
+        make_pdf(source, ["stable"])
+        changed_parse = dict(payload)
+        changed_parse["parse_version_id"] = str(uuid.uuid4())
+        with self.assertRaises(EngineError) as parse_changed:
+            self.engine.convert(changed_parse, task_id=values[3], resume=True)
+        self.assertEqual(parse_changed.exception.code, "IDEMPOTENCY_MISMATCH")
+
+    def test_same_basename_uses_source_identity_and_image_is_partial(self):
+        first = self.root / "one" / "same.pdf"
+        second = self.root / "two" / "same.pdf"
+        first.parent.mkdir()
+        second.parent.mkdir()
+        make_pdf(first, ["first file"])
+        make_pdf(second, ["second file"])
+        values1, payload1 = self.payload(first, stage_name="same-one")
+        values2, payload2 = self.payload(second, stage_name="same-two")
+        result1 = self.engine.convert(payload1, task_id=values1[3])["manifest"]
+        result2 = self.engine.convert(payload2, task_id=values2[3])["manifest"]
+        self.assertNotEqual(result1["source_hash"], result2["source_hash"])
+        self.assertNotEqual(result1["objects"][0]["object_id"], result2["objects"][0]["object_id"])
+        self.assertEqual(result1["search_units"][0]["display_text"], "first file")
+        self.assertEqual(result2["search_units"][0]["display_text"], "second file")
+
+        image = self.root / "scan.png"
+        image.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\rIHDR" + (100).to_bytes(4, "big") + (80).to_bytes(4, "big") + b"\x08\x02\x00\x00\x00")
+        values3, payload3 = self.payload(image, profile="deep", stage_name="image")
+        image_manifest = self.engine.convert(payload3, task_id=values3[3])["manifest"]
+        self.assertEqual(image_manifest["completion"], "partial")
+        self.assertEqual(image_manifest["search_coverage"]["state"], "unavailable")
+        self.assertEqual(image_manifest["objects"][0]["type"], "image")
+        self.assertIn(image_manifest["pages"][0]["preview_resource_id"], {resource["resource_id"] for resource in image_manifest["resources"]})
+        self.assertEqual(image_manifest["search_units"], [])
+
+    def test_resource_path_escape_is_rejected(self):
+        with self.assertRaises(EngineError):
+            safe_relative_path("../outside.bin")
+        with self.assertRaises(EngineError):
+            safe_relative_path("resources/../../outside.bin")
+
+    def test_jsonl_subprocess_flushes_progress_cancel_and_resume(self):
+        source = self.root / "process.pdf"
+        make_pdf(source, ["page-{}".format(index) for index in range(20)])
+        values, payload = self.payload(source, pages=list(range(20)), stage_name="process")
+        environment = os.environ.copy()
+        environment["PYTHONPATH"] = str(Path(__file__).parents[1])
+        process = subprocess.Popen(
+            [sys.executable, "-m", "material_engine"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+            env=environment,
+            cwd=str(Path.cwd()),
+        )
+        line_queue = queue.Queue()
+
+        def attach_reader():
+            current_queue = line_queue
+            current_stream = process.stdout
+
+            def read_lines():
+                for line in current_stream:
+                    current_queue.put(line)
+                current_queue.put(None)
+
+            thread = threading.Thread(target=read_lines, daemon=True)
+            thread.start()
+
+        def send(value):
+            process.stdin.write(json.dumps(value, ensure_ascii=False) + "\n")
+            process.stdin.flush()
+
+        def read_until(predicate, timeout=30):
+            found = []
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                try:
+                    line = line_queue.get(timeout=max(0.05, deadline - time.monotonic()))
+                except queue.Empty:
+                    continue
+                if line is None:
+                    break
+                value = json.loads(line)
+                found.append(value)
+                if predicate(value):
+                    return found
+            self.fail("sidecar did not emit expected event; received {}".format([item.get("kind") for item in found]))
+
+        try:
+            attach_reader()
+            send({"contract_version": "2.0.0", "request_id": str(uuid.uuid4()), "name": "handshake", "task_id": None, "payload": {}})
+            ready = read_until(lambda value: value.get("kind") == "ready")
+            self.assertEqual(ready[-1]["payload"]["material_format"], "focaus.material/2.0.0")
+            send({"contract_version": "2.0.0", "request_id": str(uuid.uuid4()), "name": "convert", "task_id": values[3], "payload": payload})
+            progress = read_until(lambda value: value.get("kind") == "checkpoint" and value.get("payload", {}).get("state") == "running")
+            running = progress[-1]
+            self.assertIn(0, running["payload"]["completed_pages"])
+            send({"contract_version": "2.0.0", "request_id": str(uuid.uuid4()), "name": "cancel", "task_id": values[3], "payload": {}})
+            cancelled = read_until(lambda value: value.get("kind") == "error" and value.get("payload", {}).get("error", {}).get("code") == "CANCELLED")
+            self.assertTrue(any(value.get("kind") == "page_result" for value in progress + cancelled))
+            checkpoint = json.loads((self.root / "process" / "checkpoint.json").read_text())
+            self.assertLess(len(checkpoint["completed_pages"]), 20)
+            # Close the first process and recover from its on-disk checkpoint
+            # in a fresh process, which is the host restart path.
+            process.stdin.close()
+            process.wait(timeout=30)
+            process.stdout.close()
+            process.stderr.close()
+            process = subprocess.Popen(
+                [sys.executable, "-m", "material_engine"],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1,
+                env=environment,
+                cwd=str(Path.cwd()),
+            )
+            line_queue = queue.Queue()
+            attach_reader()
+            send({"contract_version": "2.0.0", "request_id": str(uuid.uuid4()), "name": "handshake", "task_id": None, "payload": {}})
+            read_until(lambda value: value.get("kind") == "ready")
+            resume_request = dict(payload)
+            send({"contract_version": "2.0.0", "request_id": str(uuid.uuid4()), "name": "resume", "task_id": values[3], "payload": resume_request})
+            completed = read_until(lambda value: value.get("kind") == "completed", timeout=45)
+            manifest = completed[-1]["payload"]["manifest"]
+            self.assertEqual(len(manifest["pages"]), 20)
+            self.assertEqual(manifest["completion"], "complete")
+        finally:
+            if process.stdin:
+                process.stdin.close()
+            process.wait(timeout=30)
+            if process.stdout:
+                process.stdout.close()
+            if process.stderr:
+                process.stderr.close()
