@@ -46,7 +46,9 @@ def main() -> int:
         worker.start()
 
     def write(response: dict) -> None:
-        sys.stdout.write(json.dumps(response, ensure_ascii=False, separators=(",", ":")) + "\n")
+        # ASCII escaping keeps backslashes followed by ``u`` and all control
+        # ranges unambiguous for hosts that parse each JSONL line directly.
+        sys.stdout.write(json.dumps(response, ensure_ascii=True, separators=(",", ":")) + "\n")
         sys.stdout.flush()
 
     while True:

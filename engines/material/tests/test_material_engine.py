@@ -327,3 +327,41 @@ class MaterialEngineTests(TestCase):
         responses = protocol.handle(convert)
         self.assertEqual(responses[-1]["kind"], "error")
         self.assertEqual(responses[-1]["payload"]["error"]["code"], "CANCELLED")
+
+    def test_jsonl_escapes_backslash_nul_and_c1_text(self):
+        source = self.root / "control-text.pdf"
+        make_pdf(source, ["literal\\u0000\\\\tail\x00\x81学习"])
+        values, payload = self.payload(source, stage_name="control-text")
+        environment = os.environ.copy()
+        environment["PYTHONPATH"] = str(Path(__file__).parents[1])
+        request = {
+            "contract_version": "2.0.0",
+            "request_id": str(uuid.uuid4()),
+            "name": "convert",
+            "task_id": values[3],
+            "payload": payload,
+        }
+        process = subprocess.Popen(
+            [sys.executable, "-m", "material_engine"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=environment,
+            cwd=str(Path.cwd()),
+        )
+        try:
+            stdout, stderr = process.communicate(json.dumps(request, ensure_ascii=True) + "\n", timeout=30)
+            self.assertEqual(process.returncode, 0, stderr)
+            responses = [json.loads(line) for line in stdout.splitlines() if line.strip()]
+            self.assertTrue(any(response["kind"] == "page_result" for response in responses))
+            completed = next(response for response in responses if response["kind"] == "completed")
+            self.assertEqual(completed["payload"]["manifest"]["completion"], "complete")
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=10)
+            if process.stdout:
+                process.stdout.close()
+            if process.stderr:
+                process.stderr.close()
