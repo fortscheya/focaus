@@ -1,6 +1,6 @@
 import {describe, expect, it} from 'vitest';
 import type {VisualizationEvaluateInput} from '@focaus/contracts';
-import {FixtureHostAdapter, makeEnvelope} from './hostAdapter.ts';
+import {FixtureHostAdapter, formatNativeError, makeEnvelope} from './hostAdapter.ts';
 
 const parameters = {
   operator_dimension: 2 as const,
@@ -47,5 +47,12 @@ describe('fixture host visualization contract', () => {
     const response = await adapter.invoke('visualization.evaluate', input({parameters: {...parameters, stride: [0, 0]}}), makeEnvelope('visualization.evaluate'));
     expect(response.status).toBe('error');
     expect(response.error?.code).toBe('INVALID_ARGUMENT');
+  });
+});
+
+describe('native error formatting', () => {
+  it('keeps structured SafeError fields visible instead of rendering [object Object]', () => {
+    expect(formatNativeError({code: 'AUTH_REQUIRED', message: 'picker denied', scope: 'asset', retryable: false})).toBe('AUTH_REQUIRED: picker denied (scope=asset, retryable=false)');
+    expect(formatNativeError({reason: 'fallback', nested: {value: 1}})).toBe('{"reason":"fallback","nested":{"value":1}}');
   });
 });

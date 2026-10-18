@@ -53,6 +53,25 @@ export function makeEnvelope(name: CommandName, windowId = activeWindowId, expec
   };
 }
 
+/** Formats Tauri SafeError rejections without collapsing structured data to [object Object]. */
+export function formatNativeError(error: unknown): string {
+  const object = error && typeof error === 'object' ? error as Record<string, unknown> : null;
+  const message = object && typeof object.message === 'string' ? object.message : error instanceof Error ? error.message : typeof error === 'string' ? error : null;
+  const code = object && typeof object.code === 'string' ? object.code : null;
+  const scope = object && typeof object.scope === 'string' ? object.scope : null;
+  const retryable = object && typeof object.retryable === 'boolean' ? object.retryable : null;
+  const head = [code, message].filter((value): value is string => Boolean(value)).join(': ');
+  const metadata = [scope ? 'scope=' + scope : null, retryable === null ? null : 'retryable=' + retryable].filter((value): value is string => Boolean(value)).join(', ');
+  if (head || metadata) return (head || 'native error') + (metadata ? ' (' + metadata + ')' : '');
+  try {
+    const serialized = JSON.stringify(error);
+    if (serialized !== undefined) return serialized;
+  } catch {
+    // Fall through to a safe string for circular or otherwise unserializable values.
+  }
+  return String(error);
+}
+
 export class FixtureHostAdapter implements HostAdapter {
   readonly mode = 'fixture' as const;
   readonly commands: AdapterCommandLog[] = [];
@@ -267,7 +286,7 @@ export function createNativeMaterialImportAdapter(onAccepted?: (result: Material
         onAccepted?.(result);
         return result;
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = formatNativeError(error);
         return {status: 'error', message: '资料导入未完成：' + message};
       }
     },
