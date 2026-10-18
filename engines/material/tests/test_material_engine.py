@@ -103,6 +103,7 @@ class MaterialEngineTests(TestCase):
         values, payload = self.payload(source, stage_name="correction")
         first = self.engine.convert(payload, task_id=values[3])
         object_value = first["manifest"]["objects"][0]
+        old_snapshot_bytes = Path(first["manifest_path"]).read_bytes()
         correction = {
             "correction_id": str(uuid.uuid4()),
             "source_version_id": values[1],
@@ -118,12 +119,53 @@ class MaterialEngineTests(TestCase):
         payload2["source_version_id"] = values[1]
         payload2["parse_version_id"] = str(uuid.uuid4())
         payload2["parent_parse_version_id"] = values[2]
+        payload2["parent_manifest_handle"] = str(self.root / "correction" / "snapshots" / (values[2] + ".json"))
         payload2["corrections"] = [correction]
         result = self.engine.convert(payload2, task_id=values2[3])
         self.assertEqual(result["manifest"]["objects"][0]["content"]["runs"][0]["text"], "after")
         self.assertEqual(result["manifest"]["search_units"][0]["display_text"], "after")
         self.assertEqual(result["manifest"]["corrections_applied"][0]["replay_status"], "applied")
         self.assertEqual(source.read_bytes().count(b"before"), 1)
+        self.assertEqual(Path(first["manifest_path"]).read_bytes(), old_snapshot_bytes)
+
+    def test_each_page_publication_is_an_immutable_snapshot_with_existing_parent(self):
+        source = self.root / "publication-chain.pdf"
+        make_pdf(source, ["first", "second"])
+        values, payload = self.payload(source, pages=[0, 1], stage_name="publication-chain")
+        page_results = []
+        result = self.engine.convert(payload, task_id=values[3], on_page=page_results.append)
+        manifest = result["manifest"]
+        published = result["published_parse_versions"]
+        self.assertEqual(len(published), 3)
+        self.assertEqual(published[-1], values[2])
+        self.assertEqual(len(set(published)), 3)
+        self.assertEqual([item["manifest"]["parse_version_id"] for item in page_results], published[:2])
+        self.assertEqual([len(item["manifest"]["pages"]) for item in page_results], [1, 2])
+        self.assertEqual(manifest["parent_parse_version_id"], published[-2])
+        for index, parse_version_id in enumerate(published):
+            snapshot_path = self.root / "publication-chain" / "snapshots" / (parse_version_id + ".json")
+            self.assertTrue(snapshot_path.is_file())
+            snapshot = json.loads(snapshot_path.read_text())
+            self.assertEqual(snapshot["parse_version_id"], parse_version_id)
+            parent = snapshot.get("parent_parse_version_id")
+            if parent is not None:
+                self.assertTrue((snapshot_path.parent / (parent + ".json")).is_file())
+            if index < 2:
+                self.assertEqual(snapshot["provenance"]["publication_kind"], "page_checkpoint")
+        first_snapshot = (self.root / "publication-chain" / "snapshots" / (published[0] + ".json")).read_bytes()
+        replay = self.engine.convert(payload, task_id=values[3], resume=True)
+        self.assertEqual(replay["manifest"]["parse_version_id"], values[2])
+        self.assertEqual((self.root / "publication-chain" / "snapshots" / (published[0] + ".json")).read_bytes(), first_snapshot)
+
+    def test_unknown_parent_snapshot_is_rejected_before_publication(self):
+        source = self.root / "missing-parent.pdf"
+        make_pdf(source, ["page"])
+        values, payload = self.payload(source, stage_name="missing-parent")
+        payload["parent_parse_version_id"] = str(uuid.uuid4())
+        with self.assertRaises(EngineError) as error:
+            self.engine.convert(payload, task_id=values[3])
+        self.assertEqual(error.exception.code, "SOURCE_UNAVAILABLE")
+        self.assertFalse((self.root / "missing-parent" / "manifest.json").exists())
 
     def test_resume_skips_completed_page_and_retries_remaining_page(self):
         source = self.root / "two-pages.pdf"
@@ -168,6 +210,8 @@ class MaterialEngineTests(TestCase):
         self.assertEqual([point["y"] for point in chart["content"]["series"][0]["points"]], [1.0, 2.0])
         self.assertEqual(diagram["status"], "complete")
         self.assertEqual(diagram["content"]["edges"][0]["status"], "known")
+        search_fields = {unit["field_path"] for unit in manifest["search_units"]}
+        self.assertIn("content.nodes[{}].label".format(diagram["content"]["nodes"][0]["node_id"]), search_fields)
 
     def test_resume_rejects_changed_source_and_parse_version(self):
         source = self.root / "resume-guard.pdf"

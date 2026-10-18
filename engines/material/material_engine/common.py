@@ -139,6 +139,32 @@ class IdentityAllocator:
         self._resolved[cache_key] = value
         return value
 
+    def unique_id(self, kind: str, key: str, existing: Iterable[str]) -> str:
+        """Allocate a publication identity, preferring a host pool entry.
+
+        Parse snapshots are publication events, so an engine fallback uses a
+        random UUID and records the candidate rather than deriving an ID from
+        a page number or file name.  A host supplied value remains authoritative.
+        """
+        existing_set = {str(value) for value in existing}
+        pooled = self._pool_value(kind, key)
+        if pooled is not None:
+            if pooled in existing_set:
+                raise EngineError(
+                    "IDEMPOTENCY_MISMATCH",
+                    "identity_pool publication ID is already in use",
+                    scope="task",
+                    details={"identity_key": "{}:{}".format(kind, key)},
+                )
+            self._resolved[(str(kind), str(key))] = pooled
+            return pooled
+        for _ in range(16):
+            candidate = str(uuid.uuid4())
+            if candidate not in existing_set:
+                self._candidate_keys.append("{}:{}".format(kind, key))
+                return candidate
+        raise EngineError("IDEMPOTENCY_MISMATCH", "could not allocate a unique publication ID", scope="task")
+
     @property
     def used_candidates(self) -> List[str]:
         return list(dict.fromkeys(self._candidate_keys))
@@ -232,6 +258,20 @@ class ResourceStore:
         relative_path = safe_relative_path("resources/{}{}".format(resource_id, extension))
         destination = self.staging_root / relative_path
         destination.parent.mkdir(parents=True, exist_ok=True)
+        existing_record = self._records.get(resource_id)
+        if existing_record is not None and destination.is_file():
+            existing_data = destination.read_bytes()
+            if existing_data != data:
+                raise EngineError(
+                    "CORRUPT_ASSET",
+                    "immutable resource ID was reused with different bytes",
+                    scope="asset",
+                    details={"resource_id": resource_id},
+                )
+            existing_record["owner_refs"] = list(dict.fromkeys(existing_record.get("owner_refs", []) + owner_refs))
+            self._key_to_id[key] = resource_id
+            self._bytes_by_key[key] = data
+            return resource_id
         temporary = destination.with_name(destination.name + ".tmp")
         temporary.write_bytes(data)
         os.replace(str(temporary), str(destination))

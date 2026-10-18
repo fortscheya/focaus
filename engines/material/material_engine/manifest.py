@@ -4,17 +4,18 @@ from __future__ import annotations
 
 import json
 import os
+from copy import deepcopy
 from pathlib import Path
 from typing import Iterable, List, Optional, Sequence
 
 from .common import (
-    CONTRACT_VERSION,
     EXTRACTION_VERSION,
     MATERIAL_FORMAT,
     MATERIAL_FORMAT_VERSION,
     SEARCH_PROFILE,
     ExtractionContext,
     ensure_within,
+    is_uuid,
     safe_relative_path,
     sha256_bytes,
 )
@@ -28,11 +29,20 @@ def _write_json(path: Path, value: dict) -> None:
     os.replace(str(temporary), str(path))
 
 
-def _coverage(ctx: ExtractionContext, drafts: Sequence[PageDraft]) -> dict:
+def _coverage(ctx: ExtractionContext, drafts: Sequence[PageDraft], expected_page_count: Optional[int] = None) -> dict:
     requested_pages = [draft.page_id for draft in drafts]
     processed_pages = [draft.page_id for draft in drafts if draft.processed_for_search]
     unprocessed = [area for draft in drafts for area in draft.coverage_unprocessed]
     failed = [area for draft in drafts for area in draft.coverage_failed]
+    if expected_page_count is not None and len(drafts) < expected_page_count:
+        unprocessed.extend(
+            {
+                "page_id": None,
+                "region_id": None,
+                "reason": "page_not_published_yet",
+            }
+            for _ in range(expected_page_count - len(drafts))
+        )
     if not drafts or (not processed_pages and (unprocessed or failed)):
         state = "unavailable"
     elif unprocessed or failed or len(processed_pages) != len(requested_pages):
@@ -56,9 +66,13 @@ def assemble_manifest(
     corrections_applied: Optional[List[dict]] = None,
     unresolved_conflicts: Optional[List[str]] = None,
     renderer_diagnostics: Optional[Sequence[str]] = None,
+    publication_parse_version_id: Optional[str] = None,
+    publication_parent_parse_version_id: Optional[str] = None,
+    expected_page_count: Optional[int] = None,
+    provenance_extra: Optional[dict] = None,
 ) -> dict:
     draft_list = sorted(list(drafts), key=lambda draft: draft.index)
-    coverage = _coverage(ctx, draft_list)
+    coverage = _coverage(ctx, draft_list, expected_page_count)
     pages = [draft.page for draft in draft_list]
     regions = [region for draft in draft_list for region in draft.regions]
     objects = [obj for draft in draft_list for obj in draft.objects]
@@ -87,13 +101,17 @@ def assemble_manifest(
         "source_kind": ctx.source_path.suffix.lower().lstrip("."),
         "source_is_immutable_input": True,
     }
+    if provenance_extra:
+        provenance.update(deepcopy(provenance_extra))
+    parse_version_id = publication_parse_version_id or ctx.parse_version_id
+    parent_parse_version_id = publication_parent_parse_version_id if publication_parent_parse_version_id is not None else ctx.parent_parse_version_id
     manifest = {
         "format": MATERIAL_FORMAT,
         "format_version": MATERIAL_FORMAT_VERSION,
         "material_id": ctx.material_id,
         "source_version_id": ctx.source_version_id,
-        "parse_version_id": ctx.parse_version_id,
-        "parent_parse_version_id": ctx.parent_parse_version_id,
+        "parse_version_id": parse_version_id,
+        "parent_parse_version_id": parent_parse_version_id,
         "source_hash": ctx.source_hash,
         "engine_build": "material-engine/0.1.0",
         "parse_profile": ctx.profile,
@@ -120,7 +138,7 @@ def _all_ids(manifest: dict) -> List[str]:
     return values
 
 
-def validate_manifest(manifest: dict, staging_root: Path) -> None:
+def validate_manifest(manifest: dict, staging_root: Path, *, check_resources: bool = True) -> None:
     required = {
         "format", "format_version", "material_id", "source_version_id", "parse_version_id",
         "parent_parse_version_id", "source_hash", "engine_build", "parse_profile", "requested_pages",
@@ -139,14 +157,15 @@ def validate_manifest(manifest: dict, staging_root: Path) -> None:
     region_ids = {region["region_id"] for region in manifest["regions"]}
     object_ids = {obj["object_id"] for obj in manifest["objects"]}
     resource_ids = {resource["resource_id"] for resource in manifest["resources"]}
-    for resource in manifest["resources"]:
-        relative = safe_relative_path(resource["relative_path"])
-        path = ensure_within(staging_root, staging_root / relative, field_name="resource")
-        if not path.is_file():
-            raise EngineError("INVALID_RESULT", "manifest resource is missing", scope="asset", details={"resource_id": resource["resource_id"]})
-        data = path.read_bytes()
-        if len(data) != resource["byte_length"] or sha256_bytes(data) != resource["sha256"]:
-            raise EngineError("INVALID_RESULT", "manifest resource hash or length mismatch", scope="asset", details={"resource_id": resource["resource_id"]})
+    if check_resources:
+        for resource in manifest["resources"]:
+            relative = safe_relative_path(resource["relative_path"])
+            path = ensure_within(staging_root, staging_root / relative, field_name="resource")
+            if not path.is_file():
+                raise EngineError("INVALID_RESULT", "manifest resource is missing", scope="asset", details={"resource_id": resource["resource_id"]})
+            data = path.read_bytes()
+            if len(data) != resource["byte_length"] or sha256_bytes(data) != resource["sha256"]:
+                raise EngineError("INVALID_RESULT", "manifest resource hash or length mismatch", scope="asset", details={"resource_id": resource["resource_id"]})
     for page in manifest["pages"]:
         if page.get("preview_resource_id") is not None and page["preview_resource_id"] not in resource_ids:
             raise EngineError("INVALID_RESULT", "page preview resource is outside package", scope="page")
@@ -178,8 +197,107 @@ def validate_manifest(manifest: dict, staging_root: Path) -> None:
 
 
 def write_manifest(staging_root: Path, manifest: dict) -> Path:
+    """Write the replaceable recovery/head copy.
+
+    Published snapshots use :func:`write_snapshot`; this head file may move
+    forward as a task checkpoints pages and is never used as the immutable
+    identity of a parse version.
+    """
     path = ensure_within(staging_root, staging_root / "manifest.json", field_name="manifest")
     _write_json(path, manifest)
+    return path
+
+
+def snapshot_path(staging_root: Path, parse_version_id: str) -> Path:
+    if not is_uuid(parse_version_id):
+        raise EngineError("INVALID_ARGUMENT", "snapshot parse_version_id must be a UUID", scope="asset")
+    return ensure_within(
+        staging_root,
+        staging_root / "snapshots" / (str(parse_version_id) + ".json"),
+        field_name="snapshot",
+    )
+
+
+def read_snapshot(staging_root: Path, parse_version_id: str) -> Optional[dict]:
+    path = snapshot_path(staging_root, parse_version_id)
+    if not path.is_file():
+        return None
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise EngineError(
+            "CORRUPT_ASSET",
+            "parse snapshot is not valid JSON",
+            scope="asset",
+            details={"parse_version_id": str(parse_version_id), "exception": type(exc).__name__},
+        )
+    if not isinstance(value, dict):
+        raise EngineError("CORRUPT_ASSET", "parse snapshot is not an object", scope="asset")
+    return value
+
+
+def validate_snapshot_header(
+    manifest: dict,
+    *,
+    parse_version_id: str,
+    material_id: str,
+) -> None:
+    if not isinstance(manifest, dict):
+        raise EngineError("CORRUPT_ASSET", "parent snapshot is not an object", scope="asset")
+    if manifest.get("format") != MATERIAL_FORMAT or manifest.get("format_version") != MATERIAL_FORMAT_VERSION:
+        raise EngineError("UNSUPPORTED_VERSION", "parent snapshot has an unsupported material format", scope="asset")
+    if manifest.get("parse_version_id") != parse_version_id:
+        raise EngineError("IDEMPOTENCY_MISMATCH", "parent snapshot ID does not match the requested parent", scope="task")
+    if manifest.get("material_id") != material_id:
+        raise EngineError("CONFLICT", "parent snapshot belongs to another material", scope="asset")
+
+
+def write_snapshot(
+    staging_root: Path,
+    manifest: dict,
+    *,
+    externally_verified_parent_ids: Optional[Sequence[str]] = None,
+) -> Path:
+    """Publish an immutable parse snapshot without replacing an old file."""
+    parse_version_id = manifest.get("parse_version_id")
+    path = snapshot_path(staging_root, parse_version_id)
+    parent_id = manifest.get("parent_parse_version_id")
+    external_ids = set(externally_verified_parent_ids or [])
+    if parent_id is not None:
+        parent_path = snapshot_path(staging_root, parent_id)
+        if not parent_path.is_file() and parent_id not in external_ids:
+            raise EngineError(
+                "SOURCE_UNAVAILABLE",
+                "parse snapshot parent has not been published",
+                retryable=True,
+                scope="asset",
+                details={"parent_parse_version_id": str(parent_id)},
+            )
+    validate_manifest(manifest, staging_root)
+    if path.is_file():
+        existing = read_snapshot(staging_root, parse_version_id)
+        if existing == manifest:
+            return path
+        raise EngineError(
+            "IDEMPOTENCY_MISMATCH",
+            "parse_version_id already identifies a different snapshot",
+            scope="task",
+            details={"parse_version_id": str(parse_version_id)},
+        )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+    try:
+        os.link(str(temporary), str(path))
+    except FileExistsError:
+        existing = read_snapshot(staging_root, parse_version_id)
+        if existing != manifest:
+            raise EngineError("IDEMPOTENCY_MISMATCH", "snapshot publication raced with a different payload", scope="task")
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
     return path
 
 

@@ -516,6 +516,21 @@ def _chart_object(
     )
     draft.objects.append(object_value)
     draft.page["reading_order"].append(object_id)
+    for axis_index, axis in enumerate(axes):
+        if axis["label"]:
+            add_search_unit(
+                ctx,
+                draft.search_units,
+                page_index=page_index,
+                object_value=object_value,
+                text=axis["label"],
+                field_path="content.axes[{}].label".format(axis_index),
+                element_ids=[axis["axis_id"]],
+                page_id=page_id,
+                region_id=region_id,
+                bbox=bounds,
+                equivalence_group_id="eq:{}:{}:axis:{}".format(page_id, shape_key, axis_index),
+            )
     return object_value
 
 
@@ -585,6 +600,36 @@ def _diagram_from_connectors(
     )
     draft.objects.append(object_value)
     draft.page["reading_order"].append(object_id)
+    for node in nodes:
+        if node["label"]:
+            add_search_unit(
+                ctx,
+                draft.search_units,
+                page_index=page_index,
+                object_value=object_value,
+                text=node["label"],
+                field_path="content.nodes[{}].label".format(node["node_id"]),
+                element_ids=[node["node_id"]],
+                page_id=page_id,
+                region_id=region_id,
+                bbox=[0, 0, 1, 1],
+                equivalence_group_id="eq:{}:diagram:{}:node:{}".format(page_id, object_id, node["node_id"]),
+            )
+    for edge in edges:
+        if edge["label"]:
+            add_search_unit(
+                ctx,
+                draft.search_units,
+                page_index=page_index,
+                object_value=object_value,
+                text=edge["label"],
+                field_path="content.edges[{}].label".format(edge["edge_id"]),
+                element_ids=[edge["edge_id"]],
+                page_id=page_id,
+                region_id=region_id,
+                bbox=[0, 0, 1, 1],
+                equivalence_group_id="eq:{}:diagram:{}:edge:{}".format(page_id, object_id, edge["edge_id"]),
+            )
     return object_value
 
 

@@ -3,21 +3,18 @@
 from __future__ import annotations
 
 import json
-import os
 import time
-import uuid
 import zipfile
+from copy import deepcopy
 from pathlib import Path
 from threading import Event, Lock
-from typing import Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import Callable, Dict, Iterable, List, Mapping, Optional, Tuple
 
 from .common import (
     CONTRACT_VERSION,
     ExtractionContext,
     IdentityAllocator,
     ResourceStore,
-    ensure_within,
-    is_uuid,
     require_uuid,
     sha256_path,
 )
@@ -26,9 +23,13 @@ from .errors import EngineError, safe_error
 from .manifest import (
     assemble_manifest,
     read_checkpoint,
+    read_snapshot,
     validate_manifest,
+    validate_snapshot_header,
     write_checkpoint,
     write_manifest,
+    write_snapshot,
+    snapshot_path,
 )
 from .models import PageDraft
 from .pdf import _page_order, _parse_objects, extract_pdf
@@ -51,6 +52,13 @@ def _read_json(path: Path) -> Optional[dict]:
     except (OSError, ValueError):
         return None
     return value if isinstance(value, dict) else None
+
+
+def _read_manifest_file(path: Path) -> dict:
+    value = _read_json(path)
+    if value is None:
+        raise EngineError("CORRUPT_ASSET", "manifest handle is not valid JSON", scope="asset")
+    return value
 
 
 def _source_kind(path: Path) -> str:
@@ -101,8 +109,11 @@ def _draft_from_manifest(manifest: dict, page_index: int) -> Optional[PageDraft]
         if "page:{};".format(page_id) in fallback:
             page_units.append(unit)
     coverage = manifest.get("search_coverage", {})
-    unprocessed = [area for area in coverage.get("unprocessed", []) if area.get("page_id") in (None, page_id)]
-    failed = [area for area in coverage.get("failed", []) if area.get("page_id") in (None, page_id)]
+    # ``page_id=None`` entries are cumulative snapshot-level placeholders for
+    # pages that had not been published yet. They must not be copied into
+    # every resumed page draft or their count would grow on each resume.
+    unprocessed = [area for area in coverage.get("unprocessed", []) if area.get("page_id") == page_id]
+    failed = [area for area in coverage.get("failed", []) if area.get("page_id") == page_id]
     return PageDraft(
         index=page_index,
         page=page,
@@ -173,6 +184,69 @@ class MaterialEngine:
                 # silently lost or allowed to grow without limit.
                 self._pending_cancels.add(task_id)
 
+    @staticmethod
+    def _publication_id(
+        ids: IdentityAllocator,
+        staging_root: Path,
+        task_id: str,
+        sequence: int,
+        *,
+        final_id: Optional[str],
+        existing_ids: Iterable[str],
+    ) -> str:
+        existing = set(str(value) for value in existing_ids)
+        if final_id is not None:
+            if final_id in existing or snapshot_path(staging_root, final_id).is_file():
+                raise EngineError(
+                    "IDEMPOTENCY_MISMATCH",
+                    "final parse_version_id is already published",
+                    scope="task",
+                    details={"parse_version_id": str(final_id)},
+                )
+            return final_id
+        return ids.unique_id(
+            "parse_publication",
+            "{}:{}".format(task_id, sequence),
+            existing,
+        )
+
+    @staticmethod
+    def _snapshot_payload(
+        manifest: dict,
+        path: Path,
+        staging_root: Path,
+        *,
+        page: Optional[PageDraft] = None,
+        publication_sequence: Optional[int] = None,
+    ) -> dict:
+        """Build a detached page result so later correction/reparse cannot mutate it."""
+        payload = {
+            "parse_version_id": manifest["parse_version_id"],
+            "parent_parse_version_id": manifest.get("parent_parse_version_id"),
+            "snapshot_parse_version_id": manifest["parse_version_id"],
+            "manifest_path": str(path),
+            "package_root": str(staging_root),
+            "manifest": deepcopy(manifest),
+        }
+        if publication_sequence is not None:
+            payload["publication_sequence"] = publication_sequence
+        if page is not None:
+            payload.update(
+                {
+                    "source_page_index": page.index,
+                    "page": deepcopy(page.page),
+                    "regions": deepcopy(page.regions),
+                    "objects": deepcopy(page.objects),
+                    "search_units": deepcopy(page.search_units),
+                    "search_coverage": {
+                        "processed": page.processed_for_search,
+                        "unprocessed": deepcopy(page.coverage_unprocessed),
+                        "failed": deepcopy(page.coverage_failed),
+                    },
+                }
+            )
+        return payload
+
     def _validate_payload(self, payload: Mapping[str, object]) -> Tuple[dict, Path, Path, str, List[int], IdentityAllocator, Optional[str]]:
         if not isinstance(payload, Mapping):
             raise EngineError("INVALID_ARGUMENT", "conversion payload must be an object", scope="command")
@@ -204,6 +278,8 @@ class MaterialEngine:
         pages_raw = payload.get("pages", [])
         if not isinstance(pages_raw, list) or any(not isinstance(page, int) or page < 0 for page in pages_raw):
             raise EngineError("INVALID_ARGUMENT", "pages must be a list of non-negative integers", scope="command")
+        if len(set(pages_raw)) != len(pages_raw):
+            raise EngineError("INVALID_ARGUMENT", "pages must not contain duplicates", scope="command")
         source_kind = _source_kind(source_path)
         if source_kind == "unsupported":
             raise EngineError("UNSUPPORTED_CAPABILITY", "material source type is not supported by this engine", scope="asset", details={"suffix": source_path.suffix.lower()})
@@ -226,19 +302,119 @@ class MaterialEngine:
         on_page: Optional[PageCallback] = None,
         on_checkpoint: Optional[CheckpointCallback] = None,
     ) -> dict:
+        """Convert with immutable publication snapshots.
+
+        Each page checkpoint publishes a cumulative immutable snapshot under a new
+        parse ID.  The requested parse ID is reserved for the final snapshot,
+        whose parent is the last page publication (or the verified base
+        snapshot when no page was published in this attempt).
+        """
         payload, source_path, staging_root, parse_version_id, requested_pages, ids, parent_parse_version_id = self._validate_payload(payload)
         task_id = require_uuid(task_id or payload.get("task_id"), "task_id")
         source_hash = sha256_path(source_path)
         supplied_hash = payload.get("source_hash")
         if supplied_hash is not None and supplied_hash != source_hash:
-            raise EngineError("STALE_INPUT", "source hash changed before conversion", scope="asset", details={"expected_hash": str(supplied_hash), "actual_hash": source_hash})
-        existing_manifest = _read_json(staging_root / "manifest.json") if resume else None
+            raise EngineError(
+                "STALE_INPUT",
+                "source hash changed before conversion",
+                scope="asset",
+                details={"expected_hash": str(supplied_hash), "actual_hash": source_hash},
+            )
+
+        head_path = staging_root / "manifest.json"
+        existing_head = _read_json(head_path) if head_path.is_file() else None
         checkpoint = read_checkpoint(staging_root) if resume else None
-        if existing_manifest is not None:
-            if existing_manifest.get("source_hash") != source_hash or existing_manifest.get("parse_version_id") != parse_version_id:
-                raise EngineError("IDEMPOTENCY_MISMATCH", "resume staging does not match source or parse version", scope="task")
-        if checkpoint is not None and checkpoint.get("task_id") not in (None, task_id):
-            raise EngineError("IDEMPOTENCY_MISMATCH", "checkpoint belongs to another task", scope="task")
+        if not resume and checkpoint is not None:
+            raise EngineError(
+                "IDEMPOTENCY_MISMATCH",
+                "staging directory already has a task checkpoint; resume it or choose a new staging directory",
+                scope="task",
+            )
+        if resume and checkpoint is not None and checkpoint.get("parse_version_id") != parse_version_id:
+            raise EngineError(
+                "IDEMPOTENCY_MISMATCH",
+                "resume parse_version_id does not match the original task target",
+                scope="task",
+                details={"expected": str(checkpoint.get("parse_version_id")), "actual": str(parse_version_id)},
+            )
+        if existing_head is not None:
+            if existing_head.get("material_id") != payload["material_id"] or existing_head.get("source_version_id") != payload["source_version_id"]:
+                raise EngineError("CONFLICT", "staging head belongs to another material source", scope="asset")
+            if existing_head.get("source_hash") != source_hash:
+                raise EngineError("STALE_INPUT", "staging head was created from another source hash", scope="asset")
+
+        target_snapshot = read_snapshot(staging_root, parse_version_id)
+        if target_snapshot is not None:
+            if resume and checkpoint and checkpoint.get("state") == "completed":
+                validate_snapshot_header(target_snapshot, parse_version_id=parse_version_id, material_id=payload["material_id"])
+                validate_manifest(target_snapshot, staging_root)
+                return {
+                    "manifest": target_snapshot,
+                    "manifest_path": str(snapshot_path(staging_root, parse_version_id)),
+                    "head_manifest_path": str(head_path),
+                    "package_root": str(staging_root),
+                    "checkpoint": checkpoint,
+                    "published_parse_versions": checkpoint.get("published_parse_versions", [parse_version_id]),
+                }
+            raise EngineError(
+                "IDEMPOTENCY_MISMATCH",
+                "parse_version_id is already published; a new parse must use a new ID",
+                scope="task",
+                details={"parse_version_id": parse_version_id},
+            )
+
+        externally_verified_parent_ids = set()
+        if parent_parse_version_id is not None:
+            parent_snapshot = read_snapshot(staging_root, parent_parse_version_id)
+            if parent_snapshot is not None:
+                validate_snapshot_header(
+                    parent_snapshot,
+                    parse_version_id=parent_parse_version_id,
+                    material_id=payload["material_id"],
+                )
+                validate_manifest(parent_snapshot, staging_root)
+            else:
+                parent_handle = payload.get("parent_manifest_handle")
+                if not isinstance(parent_handle, str) or "://" in parent_handle:
+                    raise EngineError(
+                        "SOURCE_UNAVAILABLE",
+                        "parent_parse_version_id is not a published local snapshot",
+                        retryable=True,
+                        scope="asset",
+                        details={"parent_parse_version_id": str(parent_parse_version_id)},
+                    )
+                parent_path = Path(parent_handle).expanduser().resolve()
+                if not parent_path.is_file():
+                    raise EngineError("SOURCE_UNAVAILABLE", "parent manifest handle is unavailable", retryable=True, scope="asset")
+                parent_snapshot = _read_manifest_file(parent_path)
+                validate_snapshot_header(
+                    parent_snapshot,
+                    parse_version_id=parent_parse_version_id,
+                    material_id=payload["material_id"],
+                )
+                parent_root = parent_path.parent.parent if parent_path.parent.name == "snapshots" else parent_path.parent
+                validate_manifest(parent_snapshot, parent_root)
+                externally_verified_parent_ids.add(parent_parse_version_id)
+
+        if resume:
+            if existing_head is None or checkpoint is None:
+                raise EngineError("SOURCE_UNAVAILABLE", "resume requires a local head manifest and checkpoint", retryable=True, scope="task")
+            head_id = checkpoint.get("head_parse_version_id") or existing_head.get("parse_version_id")
+            if not isinstance(head_id, str) or read_snapshot(staging_root, head_id) is None:
+                raise EngineError("SOURCE_UNAVAILABLE", "resume head snapshot is missing", retryable=True, scope="task")
+            published_parse_versions = list(checkpoint.get("published_parse_versions", [head_id]))
+            if head_id not in published_parse_versions:
+                published_parse_versions.append(head_id)
+            existing_manifest = existing_head
+            completed = set(checkpoint.get("completed_pages", []))
+            publication_sequence = int(checkpoint.get("next_publication_sequence", len(published_parse_versions)))
+        else:
+            head_id = None
+            published_parse_versions = []
+            existing_manifest = None
+            completed = set()
+            publication_sequence = 0
+
         ctx = ExtractionContext(
             source_path=source_path,
             source_hash=source_hash,
@@ -251,8 +427,11 @@ class MaterialEngine:
             ids=ids,
             resources=ResourceStore(staging_root, ids),
         )
-        if existing_manifest is not None:
-            ctx.resources.load_existing(existing_manifest.get("resources", []))
+        # A new parse can share immutable resource bytes with the current
+        # staging head.  Loading verifies every old byte before reuse.
+        if existing_head is not None:
+            ctx.resources.load_existing(existing_head.get("resources", []))
+
         renderer = PageRenderer(ctx)
         cancel_event = Event()
         with self._lock:
@@ -260,18 +439,16 @@ class MaterialEngine:
             if task_id in self._pending_cancels:
                 cancel_event.set()
                 self._pending_cancels.discard(task_id)
+
         drafts: List[PageDraft] = []
-        if existing_manifest is not None:
+        if resume:
             for index in requested_pages:
                 previous = _draft_from_manifest(existing_manifest, index)
                 if previous is not None:
                     drafts.append(previous)
-        completed = set(checkpoint.get("completed_pages", []) if checkpoint else [])
         retry_pages = set(payload.get("retry_pages", []) if isinstance(payload.get("retry_pages", []), list) else [])
         pages_to_process = [index for index in requested_pages if index not in completed or index in retry_pages]
-        # A fresh request always processes all requested pages.  A resume with
-        # no checkpoint is intentionally equivalent to a fresh request.
-        if not resume or checkpoint is None:
+        if not resume:
             pages_to_process = requested_pages
         budget_ms = payload.get("budget_ms")
         deadline = time.monotonic() + (float(budget_ms) / 1000.0) if isinstance(budget_ms, (int, float)) and budget_ms > 0 else None
@@ -280,24 +457,48 @@ class MaterialEngine:
         if not isinstance(corrections, list):
             raise EngineError("INVALID_ARGUMENT", "corrections must be a list", scope="command")
 
-        def current_draft(index: int) -> Optional[PageDraft]:
-            return next((draft for draft in drafts if draft.index == index), None)
+        def publish_snapshot(
+            publication_id: str,
+            publication_parent_id: Optional[str],
+            *,
+            corrections_applied: Optional[List[dict]] = None,
+            unresolved_conflicts: Optional[List[str]] = None,
+            publication_kind: str,
+            sequence: int,
+        ) -> Tuple[dict, Path]:
+            manifest = assemble_manifest(
+                ctx,
+                drafts,
+                requested_pages,
+                corrections_applied=corrections_applied,
+                unresolved_conflicts=unresolved_conflicts,
+                renderer_diagnostics=renderer.diagnostics,
+                publication_parse_version_id=publication_id,
+                publication_parent_parse_version_id=publication_parent_id,
+                expected_page_count=len(requested_pages),
+                provenance_extra={
+                    "publication_kind": publication_kind,
+                    "publication_sequence": sequence,
+                    "publication_parent_verified": publication_parent_id is None or publication_parent_id in published_parse_versions or publication_parent_id in externally_verified_parent_ids,
+                    "base_parent_parse_version_id": ctx.parent_parse_version_id,
+                    "publication_chain": list(published_parse_versions) + [publication_id],
+                    "immutable_snapshot_relative_path": "snapshots/{}.json".format(publication_id),
+                },
+            )
+            path = write_snapshot(
+                staging_root,
+                manifest,
+                externally_verified_parent_ids=externally_verified_parent_ids,
+            )
+            # This is a replaceable recovery/head pointer.  The immutable
+            # snapshot above is the only parse-version identity.
+            write_manifest(staging_root, manifest)
+            return manifest, path
 
-        def emit_page(draft: PageDraft) -> None:
+        def emit_page(manifest: dict, path: Path, page: PageDraft, sequence: int) -> None:
             if on_page is None:
                 return
-            on_page(
-                {
-                    "parse_version_id": parse_version_id,
-                    "source_page_index": draft.index,
-                    "page": draft.page,
-                    "regions": draft.regions,
-                    "objects": draft.objects,
-                    "resources": [resource for resource in ctx.resources.records() if any(owner in {draft.page_id} | {obj["object_id"] for obj in draft.objects} for owner in resource.get("owner_refs", []))],
-                    "search_units": draft.search_units,
-                    "search_coverage": {"processed": draft.processed_for_search, "unprocessed": draft.coverage_unprocessed, "failed": draft.coverage_failed},
-                }
-            )
+            on_page(self._snapshot_payload(manifest, path, staging_root, page=page, publication_sequence=sequence))
 
         try:
             for page_index in pages_to_process:
@@ -309,29 +510,52 @@ class MaterialEngine:
                 else:
                     try:
                         if source_kind == "pdf":
-                            page_drafts = extract_pdf(ctx, [page_index], renderer)
+                            draft = extract_pdf(ctx, [page_index], renderer)[0]
                         elif source_kind == "pptx":
-                            page_drafts = extract_pptx(ctx, [page_index], renderer)
+                            draft = extract_pptx(ctx, [page_index], renderer)[0]
                         elif source_kind == "text":
-                            page_drafts = extract_text(ctx, [page_index], renderer)
+                            draft = extract_text(ctx, [page_index], renderer)[0]
                         else:
-                            page_drafts = extract_image(ctx, [page_index], renderer)
-                        draft = page_drafts[0]
+                            draft = extract_image(ctx, [page_index], renderer)[0]
                     except EngineError as exc:
-                        # A single page error is isolated so other pages and
-                        # recording tasks are not made to wait or fail.
                         draft = _failed_draft(ctx, page_index, exc.as_safe_error())
-                    except Exception as exc:  # pragma: no cover - malformed third-party input guard
-                        draft = _failed_draft(ctx, page_index, safe_error("CORRUPT_ASSET", "page parser failed", retryable=True, scope="page", details={"exception": type(exc).__name__}))
-                previous = current_draft(page_index)
+                    except Exception as exc:  # pragma: no cover - malformed asset boundary
+                        draft = _failed_draft(
+                            ctx,
+                            page_index,
+                            safe_error("CORRUPT_ASSET", "page parser failed", retryable=True, scope="page", details={"exception": type(exc).__name__}),
+                        )
                 drafts = [item for item in drafts if item.index != page_index]
                 drafts.append(draft)
                 if draft.page.get("status") != "failed":
                     completed.add(page_index)
+
+                sequence = publication_sequence
+                publication_sequence += 1
+                publication_id = self._publication_id(
+                    ids,
+                    staging_root,
+                    task_id,
+                    sequence,
+                    final_id=None,
+                    existing_ids=published_parse_versions + ([parse_version_id] if parse_version_id else []),
+                )
+                publication_parent_id = head_id or parent_parse_version_id
+                manifest, snapshot = publish_snapshot(
+                    publication_id,
+                    publication_parent_id,
+                    publication_kind="page_checkpoint",
+                    sequence=sequence,
+                )
+                published_parse_versions.append(publication_id)
+                head_id = publication_id
                 checkpoint_value = {
                     "contract_version": CONTRACT_VERSION,
                     "task_id": task_id,
                     "parse_version_id": parse_version_id,
+                    "head_parse_version_id": head_id,
+                    "published_parse_versions": list(published_parse_versions),
+                    "next_publication_sequence": publication_sequence,
                     "source_hash": source_hash,
                     "profile": payload["profile"],
                     "requested_pages": requested_pages,
@@ -339,35 +563,36 @@ class MaterialEngine:
                     "failed_pages": sorted(item.index for item in drafts if item.page.get("status") == "failed"),
                     "state": "running",
                 }
-                try:
-                    partial_manifest = assemble_manifest(ctx, drafts, requested_pages, renderer_diagnostics=renderer.diagnostics)
-                except EngineError:
-                    # Keep the page checkpoint even if a partially accumulated
-                    # package cannot yet satisfy its final closure.
-                    partial_manifest = None
-                if partial_manifest is not None:
-                    write_manifest(staging_root, partial_manifest)
                 write_checkpoint(staging_root, checkpoint_value)
                 if on_checkpoint is not None:
-                    on_checkpoint(checkpoint_value)
-                emit_page(draft)
+                    on_checkpoint(deepcopy(checkpoint_value))
+                emit_page(manifest, snapshot, draft, sequence)
                 if cancel_event.is_set():
                     raise EngineError("CANCELLED", "conversion was cancelled", retryable=True, scope="task")
 
-            replayed, conflicts = replay_corrections(ctx, drafts, corrections)
-            manifest = assemble_manifest(
+            replayed, conflicts = replay_corrections(
                 ctx,
                 drafts,
-                requested_pages,
+                corrections,
+                accepted_parse_version_ids=published_parse_versions,
+            )
+            final_parent_id = head_id or parent_parse_version_id
+            final_manifest, final_snapshot = publish_snapshot(
+                parse_version_id,
+                final_parent_id,
                 corrections_applied=replayed,
                 unresolved_conflicts=conflicts,
-                renderer_diagnostics=renderer.diagnostics,
+                publication_kind="final",
+                sequence=publication_sequence,
             )
-            manifest_path = write_manifest(staging_root, manifest)
+            published_parse_versions.append(parse_version_id)
             completed_checkpoint = {
                 "contract_version": CONTRACT_VERSION,
                 "task_id": task_id,
                 "parse_version_id": parse_version_id,
+                "head_parse_version_id": parse_version_id,
+                "published_parse_versions": list(published_parse_versions),
+                "next_publication_sequence": publication_sequence + 1,
                 "source_hash": source_hash,
                 "profile": payload["profile"],
                 "requested_pages": requested_pages,
@@ -377,8 +602,15 @@ class MaterialEngine:
             }
             write_checkpoint(staging_root, completed_checkpoint)
             if on_checkpoint is not None:
-                on_checkpoint(completed_checkpoint)
-            return {"manifest": manifest, "manifest_path": str(manifest_path), "checkpoint": completed_checkpoint}
+                on_checkpoint(deepcopy(completed_checkpoint))
+            return {
+                "manifest": final_manifest,
+                "manifest_path": str(final_snapshot),
+                "head_manifest_path": str(head_path),
+                "package_root": str(staging_root),
+                "checkpoint": completed_checkpoint,
+                "published_parse_versions": list(published_parse_versions),
+            }
         finally:
             renderer.close()
             with self._lock:

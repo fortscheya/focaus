@@ -26,11 +26,21 @@ manifest provenance 中标为 `engine_candidate_requires_host_confirmation`，�
 {"contract_version":"2.0.0","request_id":"...","name":"convert","task_id":"...","payload":{"material_id":"...","source_version_id":"...","parse_version_id":"...","source_handle":"/host/managed/read-only.pdf","staging_handle":"/host/task-staging","identity_pool":{},"profile":"deep","pages":[],"corrections":[],"budget_ms":600000}}
 ```
 
-结果顺序为多个 `checkpoint`/`page_result`，最后是 `completed`。单页解析、渲染
+结果顺序为多个 `checkpoint`/`page_result`，最后是 `completed`。每个
+`page_result` 都带一个新的 `snapshot_parse_version_id`、累计 `manifest` 和
+`manifest_path`，对应 `staging_handle/snapshots/<parse_version_id>.json`；文件只
+能创建一次，`parent_parse_version_id` 必须先存在。请求中的 `parse_version_id`
+保留给最终快照，`manifest.json` 只是可替换的恢复/head 副本，不能作为历史快照
+身份。单页解析、渲染
 或对象重构失败会保留该页的 `failed` 或 `partial` 状态并继续其他页；只有输入
 不可读、版本不兼容、staging 越界等全局错误才返回 task-level error。`resume` 使用
 同一 staging 目录里的 checkpoint 跳过已完成页；`retry_pages` 可在 payload 中
 指定局部重试页。
+
+重解析若父快照不在当前 staging 目录，应在 payload 中提供宿主托管的本地
+`parent_manifest_handle`。sidecar 会校验 `material_id`、`parse_version_id`、格式、
+资源 hash 和闭包后才开始发布；不存在的父版本不会被静默当作根。资源字节按
+`resource_id`/SHA-256 复用并拒绝不同字节覆盖，旧 snapshot JSON 始终保留。
 
 ## 解析和覆盖边界
 

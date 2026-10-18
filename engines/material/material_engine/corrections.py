@@ -141,6 +141,7 @@ def replay_corrections(
     ctx: ExtractionContext,
     drafts: Iterable[Any],
     corrections: Iterable[dict],
+    accepted_parse_version_ids: Optional[Iterable[str]] = None,
 ) -> Tuple[List[dict], List[str]]:
     """Apply only corrections whose base selector and before hash still match."""
 
@@ -158,6 +159,7 @@ def replay_corrections(
         allowed_parse_versions = {ctx.parse_version_id}
         if ctx.parent_parse_version_id:
             allowed_parse_versions.add(ctx.parent_parse_version_id)
+        allowed_parse_versions.update(str(value) for value in (accepted_parse_version_ids or []))
         if correction.get("source_version_id") != ctx.source_version_id:
             status = "conflict"
             conflicts.append("{}:source_version_mismatch".format(correction_id))
