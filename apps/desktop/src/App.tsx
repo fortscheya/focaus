@@ -115,6 +115,14 @@ function parseContentViewResponse(result: unknown): ContentView | null {
   return parseContentView(unwrapEntity(result, 'view')) ?? parseContentView(result);
 }
 
+function parseRecordingCoverage(value: unknown): {recording_id: string; kind: 'asset' | 'span'} | null {
+  const record = asRecord(value);
+  if (!record || typeof record.recording_id !== 'string') return null;
+  if (typeof record.audio_asset_id === 'string' || typeof record.resource_id === 'string') return {recording_id: record.recording_id, kind: 'asset'};
+  if (typeof record.audio_span_id === 'string' || typeof record.coverage_status === 'string') return {recording_id: record.recording_id, kind: 'span'};
+  return null;
+}
+
 function extractViewsFromSnapshot(snapshot: unknown): ContentView[] {
   const record = asRecord(snapshot);
   const records = record ? asRecord(record.records) : null;
@@ -169,7 +177,7 @@ export function App() {
         const isRecordingCoverageEvent = recordingEventKind === 'coverage';
         const isRecordingWatermarkEvent = recordingEventKind === 'watermark';
         const isRecordingSessionEvent = recordingEventKind === 'session';
-        const isNormalEntityEvent = isRecordingSessionEvent || isRecordingCoverageEvent || event.event_type.startsWith('course.') || event.event_type.startsWith('lesson.') || event.event_type.startsWith('content.') || isViewEvent;
+        const isNormalEntityEvent = isRecordingSessionEvent || isRecordingCoverageEvent || isRecordingWatermarkEvent || event.event_type.startsWith('course.') || event.event_type.startsWith('lesson.') || event.event_type.startsWith('content.') || isViewEvent;
         const isKnownProjectionEvent = event.event_type.startsWith('search.') || event.event_type.startsWith('task.') || event.event_type.startsWith('visualization.') || event.event_type.startsWith('focaus.') || event.event_type.startsWith('progress.') || event.event_type.startsWith('material.') || event.event_type.startsWith('language.') || event.event_type.startsWith('state.') || event.event_type.startsWith('workspace.');
         if (!isNormalEntityEvent && !isKnownProjectionEvent) throw new Error(`未知 native event type：${event.event_type}；未 ACK，等待重试或重新 state.open`);
         if (isKnownProjectionEvent && !isNormalEntityEvent) {
@@ -206,15 +214,32 @@ export function App() {
         const response = await activeRuntime.adapter.invoke('content.get', {entity_id: event.entity_id, revision_id: event.revision_id, selector: null}, makeEnvelope('content.get'));
         if (response.status === 'error') throw new Error(`事件 ${event.event_type} 的 content.get 失败：${response.error?.message ?? response.error?.code ?? 'unknown error'}`);
         if (isRecordingCoverageEvent) {
+          const coverageRecord = asRecord(response.result);
+          const coverage = parseRecordingCoverage(coverageRecord?.asset ?? coverageRecord?.span ?? response.result);
+          if (!coverage) throw new Error(`事件 ${event.event_type} 的 content.get 未返回合法 AudioAsset/AudioSpan`);
           contentHeadsRef.current[event.entity_id] = response.result;
           setNativeContentHeads({...contentHeadsRef.current});
-          const coverage = asRecord(unwrapEntity(response.result, 'coverage')) ?? asRecord(response.result);
-          const linkedRecordingId = typeof coverage?.recording_id === 'string' ? coverage.recording_id : event.payload && typeof event.payload === 'object' && typeof (event.payload as Record<string, unknown>).recording_id === 'string' ? (event.payload as Record<string, unknown>).recording_id as string : null;
-          if (linkedRecordingId) {
+          const recordingResponse = await activeRuntime.adapter.invoke('content.get', {entity_id: coverage.recording_id, revision_id: null, selector: null}, makeEnvelope('content.get'));
+          if (recordingResponse.status === 'error') throw new Error(`coverage_changed 关联 RecordingSession 读取失败：${recordingResponse.error?.message ?? recordingResponse.error?.code ?? 'unknown error'}`);
+          const linkedRecording = parseRecordingResponse(recordingResponse.result);
+          if (!linkedRecording) throw new Error('coverage_changed 关联 content.get 未返回合法 RecordingSession');
+          recordingRef.current = linkedRecording;
+          setRecordingSession(linkedRecording);
+          setRecordingState(linkedRecording.state);
+        } else if (isRecordingWatermarkEvent) {
+          const nextRecording = parseRecordingResponse(response.result);
+          if (nextRecording) {
+            recordingRef.current = nextRecording;
+            setRecordingSession(nextRecording);
+            setRecordingState(nextRecording.state);
+          } else {
+            const payloadRecord = asRecord(event.payload);
+            const linkedRecordingId = typeof payloadRecord?.recording_id === 'string' ? payloadRecord.recording_id : recordingRef.current?.recording_id ?? null;
+            if (!linkedRecordingId) throw new Error(`事件 ${event.event_type} 缺少 recording_id，无法读取 durable watermark`);
             const recordingResponse = await activeRuntime.adapter.invoke('content.get', {entity_id: linkedRecordingId, revision_id: null, selector: null}, makeEnvelope('content.get'));
-            if (recordingResponse.status === 'error') throw new Error(`coverage_changed 关联 RecordingSession 读取失败：${recordingResponse.error?.message ?? recordingResponse.error?.code ?? 'unknown error'}`);
+            if (recordingResponse.status === 'error') throw new Error(`watermark_changed 关联 RecordingSession 读取失败：${recordingResponse.error?.message ?? recordingResponse.error?.code ?? 'unknown error'}`);
             const linkedRecording = parseRecordingResponse(recordingResponse.result);
-            if (!linkedRecording) throw new Error('coverage_changed 关联 content.get 未返回合法 RecordingSession');
+            if (!linkedRecording) throw new Error('watermark_changed 关联 content.get 未返回合法 RecordingSession');
             recordingRef.current = linkedRecording;
             setRecordingSession(linkedRecording);
             setRecordingState(linkedRecording.state);
@@ -225,13 +250,6 @@ export function App() {
             recordingRef.current = nextRecording;
             setRecordingSession(nextRecording);
             setRecordingState(nextRecording.state);
-          } else if (isRecordingWatermarkEvent) {
-            const watermarkRecord = asRecord(unwrapEntity(response.result, 'recording')) ?? asRecord(response.result);
-            const durableWatermark = watermarkRecord && typeof watermarkRecord.durable_watermark_ms === 'number' ? watermarkRecord.durable_watermark_ms : null;
-            if (durableWatermark === null || !recordingRef.current) throw new Error(`事件 ${event.event_type} 的 content.get 未返回可用 durable_watermark_ms`);
-            const updatedRecording = {...recordingRef.current, durable_watermark_ms: durableWatermark, revision_id: event.revision_id};
-            recordingRef.current = updatedRecording;
-            setRecordingSession(updatedRecording);
           } else {
             throw new Error(`事件 ${event.event_type} 的 content.get 未返回合法 RecordingSession`);
           }
