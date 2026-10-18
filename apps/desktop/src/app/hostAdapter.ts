@@ -109,14 +109,28 @@ export class FixtureHostAdapter implements HostAdapter {
     }
 
     if (name === 'visualization.evaluate') {
-      return {
-        contract_version: CONTRACT_VERSION,
-        command_id: envelope.command_id,
-        status: 'ok',
-        result: fixtureEvaluation(payload as VisualizationEvaluateInput),
-        committed_revisions: {},
-        event_seq: this.commands.length,
-      };
+      try {
+        return {
+          contract_version: CONTRACT_VERSION,
+          command_id: envelope.command_id,
+          status: 'ok',
+          result: await fixtureEvaluation(payload as VisualizationEvaluateInput),
+          committed_revisions: {},
+          event_seq: this.commands.length,
+        };
+      } catch (error) {
+        return {
+          contract_version: CONTRACT_VERSION,
+          command_id: envelope.command_id,
+          status: 'error',
+          error: {
+            code: 'INVALID_ARGUMENT',
+            retryable: false,
+            scope: 'command',
+            message: error instanceof Error ? error.message : 'Fixture evaluation received invalid parameters.',
+          },
+        };
+      }
     }
 
     if (name === 'search.open') {
@@ -344,7 +358,20 @@ export async function bootstrapNativeRuntime(onEventBatch: (batch: EventBatch) =
   }
 }
 
-function fixtureEvaluation(input: VisualizationEvaluateInput): EvaluationResult {
+function stableJson(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  const object = value as Record<string, unknown>;
+  return `{${Object.keys(object).sort().map((key) => `${JSON.stringify(key)}:${stableJson(object[key])}`).join(',')}}`;
+}
+
+async function sha256(value: unknown): Promise<string> {
+  const bytes = new TextEncoder().encode(stableJson(value));
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+async function fixtureEvaluation(input: VisualizationEvaluateInput): Promise<EvaluationResult> {
   const parameters = input.parameters as {
     input: number[][][];
     kernel: number[][][];
@@ -421,11 +448,12 @@ function fixtureEvaluation(input: VisualizationEvaluateInput): EvaluationResult 
     }
   }
 
+  const parametersHash = await sha256(input.parameters);
   return {
     object_id: input.object_id,
     revision_id: input.revision_id,
     interaction_seq: input.interaction_seq,
-    parameters_hash: 'a'.repeat(64),
+    parameters_hash: parametersHash,
     algorithm_version: input.algorithm_version,
     shape: [outputHeight, outputWidth],
     values,
@@ -433,7 +461,7 @@ function fixtureEvaluation(input: VisualizationEvaluateInput): EvaluationResult 
     validation: {
       checks: {schema: 'pass', source: 'pass', semantic: 'pass', math: 'pass'},
       validator_version: '1.0.0',
-      parameters_hash: 'a'.repeat(64),
+      parameters_hash: parametersHash,
       validated_revision: input.revision_id,
       diagnostics: ['fixture adapter: deterministic result; native N validator not called'],
     },

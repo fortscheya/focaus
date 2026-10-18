@@ -1,3 +1,5 @@
+import type {CheckState, EvaluationResult} from '@focaus/contracts';
+
 export type OperatorSemantics = 'cross_correlation' | 'convolution';
 
 export interface Conv2dParameters {
@@ -30,6 +32,65 @@ export interface FixtureEvaluation {
   steps: EvaluationStep[];
   valid: boolean;
   diagnostics: string[];
+}
+
+export interface EvaluationExpectation {
+  objectId: string;
+  revisionId: string;
+  interactionSeq: number;
+  algorithmVersion: string;
+}
+
+function objectRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function numberArray(value: unknown): value is number[] {
+  return Array.isArray(value) && value.every(isFiniteNumber);
+}
+
+function checkState(value: unknown): value is CheckState {
+  return value === 'pending' || value === 'pass' || value === 'fail' || value === 'unknown';
+}
+
+function validHash(value: unknown): value is string {
+  return typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
+}
+
+function validStep(value: unknown): boolean {
+  const step = objectRecord(value);
+  const outputIndex = step?.output_index;
+  const inputIndices = step?.input_indices;
+  const inputValues = step?.input_values;
+  const kernelValues = step?.kernel_values;
+  const products = step?.products;
+  return Boolean(
+    step && Array.isArray(outputIndex) && outputIndex.length === 2 && outputIndex.every((item) => Number.isInteger(item) && (item as number) >= 0) &&
+    Array.isArray(inputIndices) && numberArray(inputValues) && inputIndices.length === inputValues.length && inputIndices.every((pair) => Array.isArray(pair) && pair.length === 2 && pair.every((item) => Number.isInteger(item))) &&
+    numberArray(kernelValues) && numberArray(products) && inputValues.length === kernelValues.length && kernelValues.length === products.length &&
+    isFiniteNumber(step.bias) && isFiniteNumber(step.sum)
+  );
+}
+
+/** Validate a host evaluate response before it can change the controlled 2D view. */
+export function parseEvaluationResult(value: unknown, expected: EvaluationExpectation): EvaluationResult | null {
+  const result = objectRecord(value);
+  const validation = objectRecord(result?.validation);
+  const checks = objectRecord(validation?.checks);
+  const shape = result?.shape;
+  const values = result?.values;
+  const steps = result?.steps;
+  if (!result || !validation || !checks || !Array.isArray(shape) || shape.length !== 2 || !shape.every((item) => Number.isInteger(item) && (item as number) >= 1) ||
+      !numberArray(values) || !Array.isArray(steps) || steps.length !== values.length || values.length !== (shape[0] as number) * (shape[1] as number) || !steps.every(validStep) ||
+      typeof result.object_id !== 'string' || typeof result.revision_id !== 'string' || !Number.isInteger(result.interaction_seq) || (result.interaction_seq as number) < 0 ||
+      !validHash(result.parameters_hash) || typeof result.algorithm_version !== 'string' || !validHash(validation.parameters_hash) || typeof validation.validator_version !== 'string' || typeof validation.validated_revision !== 'string' ||
+      !Array.isArray(validation.diagnostics) || !validation.diagnostics.every((item) => typeof item === 'string') || !checkState(checks.schema) || !checkState(checks.source) || !checkState(checks.semantic) || !checkState(checks.math)) return null;
+  if (result.object_id !== expected.objectId || result.revision_id !== expected.revisionId || result.interaction_seq !== expected.interactionSeq || result.algorithm_version !== expected.algorithmVersion || validation.parameters_hash !== result.parameters_hash || validation.validated_revision !== expected.revisionId) return null;
+  return result as unknown as EvaluationResult;
 }
 
 export function evaluateConv2d(parameters: Conv2dParameters, interactionSeq: number): FixtureEvaluation {

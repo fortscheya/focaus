@@ -1,5 +1,5 @@
 import type {CorrectionSuggestion, Selector, SourceRef, TextAnchor} from '@focaus/contracts';
-import type {NativeProjection} from '../nativeContentProjection.ts';
+import {extractNativeSourceRefs, type NativeProjection} from '../nativeContentProjection.ts';
 
 export type NativeTextPatchTarget = {
   objectId: string;
@@ -23,11 +23,6 @@ function record(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' ? value as Record<string, unknown> : null;
 }
 
-function selector(value: unknown): Selector | null {
-  const item = record(value);
-  return item && typeof item.kind === 'string' ? item as Selector : null;
-}
-
 function textAnchor(value: unknown): TextAnchor | null {
   const item = record(value);
   const range = record(item?.scalar_range);
@@ -35,22 +30,6 @@ function textAnchor(value: unknown): TextAnchor | null {
   const elements = Array.isArray(rawElements) ? rawElements.filter((element): element is string => typeof element === 'string') : [];
   if (!item || !range || !Array.isArray(rawElements) || typeof range.start !== 'number' || typeof range.end !== 'number' || typeof item.left_element_id !== 'string' && item.left_element_id !== null || typeof item.right_element_id !== 'string' && item.right_element_id !== null || elements.length !== rawElements.length) return null;
   return {left_element_id: item.left_element_id, right_element_id: item.right_element_id, element_ids: elements, scalar_range: {start: range.start, end: range.end}};
-}
-
-export function isSourceRef(value: unknown): value is SourceRef {
-  const item = record(value);
-  return Boolean(item && typeof item.entity_id === 'string' && typeof item.revision_id === 'string' && typeof item.content_hash === 'string' && selector(item.selector));
-}
-
-function sourceRefs(value: unknown): SourceRef[] {
-  if (!Array.isArray(value)) return [];
-  return value.filter(isSourceRef);
-}
-
-function nestedSourceRefs(value: unknown): SourceRef[] {
-  const item = record(value);
-  if (!item) return [];
-  return [...sourceRefs(item.source_refs), ...sourceRefs(item.raw_refs)];
 }
 
 function objectIds(value: unknown): string[] {
@@ -99,8 +78,7 @@ export function extractNativeProjectionActions(projection: NativeProjection | nu
   if (!projection) return {sourceRefs: [], objectIds: [], noteId: null, noteRevisionId: null, textTargets: [], suggestions: []};
   const value = record(projection.value);
   const objects = Array.isArray(value?.objects) ? value.objects : [];
-  const nestedRefs = [...objects.flatMap(nestedSourceRefs), ...(Array.isArray(value?.segments) ? value.segments.flatMap(nestedSourceRefs) : []), ...(Array.isArray(value?.utterances) ? value.utterances.flatMap(nestedSourceRefs) : [])];
-  const refs = [...sourceRefs(value?.source_refs), ...nestedRefs];
+  const refs = extractNativeSourceRefs(projection.value);
   const uniqueRefs = new Map<string, SourceRef>();
   refs.forEach((source) => uniqueRefs.set(`${source.entity_id}:${source.revision_id}:${JSON.stringify(source.selector)}`, source));
   return {

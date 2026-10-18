@@ -21,7 +21,7 @@ import {
 } from './app/hostAdapter.ts';
 import {SerialNativeEventQueue} from './app/nativeEventQueue.ts';
 import {classifyRecordingEvent} from './app/nativeRecordingEvents.ts';
-import {detectNativeProjection, NativeProjectionGate, type NativeProjection} from './nativeContentProjection.ts';
+import {detectNativeProjection, nativeProjectionRevision, NativeProjectionGate, type NativeProjection} from './nativeContentProjection.ts';
 import type {SearchResultView} from './search/searchIndex.ts';
 
 type Screen = 'home' | 'workspace';
@@ -145,6 +145,13 @@ function extractProjectionsFromSnapshot(snapshot: unknown): Record<string, Nativ
   return Object.fromEntries(Object.entries(heads).map(([key, value]) => [key, detectNativeProjection(value, key, asRecord(value)?.revision_id as string | null ?? null)]));
 }
 
+function extractContentHeadsFromSnapshot(snapshot: unknown): Record<string, unknown> {
+  const record = asRecord(snapshot);
+  const records = record ? asRecord(record.records) : null;
+  const heads = records ? asRecord(records.content_heads) : null;
+  return heads ? {...heads} : {};
+}
+
 export function App() {
   const demoRequested = useMemo(isDemoRequested, []);
   if (demoRequested) return <DemoWorkspace />;
@@ -193,11 +200,13 @@ export function App() {
       if (!activeRuntime) throw new Error('native runtime disappeared before event projection');
       for (const event of nextBatch.events) {
         const isViewEvent = event.event_type.startsWith('workspace.view_') || event.event_type.startsWith('view.');
+        const isVisualizationChangedEvent = event.event_type === 'visualization.changed';
+        const isContentProjectionEvent = event.event_type.startsWith('content.') || isVisualizationChangedEvent;
         const recordingEventKind = event.event_type.startsWith('recording.') ? classifyRecordingEvent(event.event_type, event.entity_id, recordingRef.current?.recording_id ?? null) : 'unknown';
         const isRecordingCoverageEvent = recordingEventKind === 'coverage';
         const isRecordingWatermarkEvent = recordingEventKind === 'watermark';
         const isRecordingSessionEvent = recordingEventKind === 'session';
-        const isNormalEntityEvent = isRecordingSessionEvent || isRecordingCoverageEvent || isRecordingWatermarkEvent || event.event_type.startsWith('course.') || event.event_type.startsWith('lesson.') || event.event_type.startsWith('content.') || isViewEvent;
+        const isNormalEntityEvent = isRecordingSessionEvent || isRecordingCoverageEvent || isRecordingWatermarkEvent || event.event_type.startsWith('course.') || event.event_type.startsWith('lesson.') || isContentProjectionEvent || isViewEvent;
         const isKnownProjectionEvent = event.event_type.startsWith('search.') || event.event_type.startsWith('task.') || event.event_type.startsWith('visualization.') || event.event_type.startsWith('focaus.') || event.event_type.startsWith('progress.') || event.event_type.startsWith('material.') || event.event_type.startsWith('language.') || event.event_type.startsWith('state.') || event.event_type.startsWith('workspace.');
         if (!isNormalEntityEvent && !isKnownProjectionEvent) throw new Error(`未知 native event type：${event.event_type}；未 ACK，等待重试或重新 state.open`);
         if (isKnownProjectionEvent && !isNormalEntityEvent) {
@@ -208,6 +217,7 @@ export function App() {
         if (!affectsProjection) continue;
         const isDeleted = event.event_type.includes('deleted') || event.event_type.includes('removed');
         if (isDeleted) {
+          if (isContentProjectionEvent) projectionGate.current.begin(event.entity_id, event.revision_id);
           if (recordingRef.current?.recording_id === event.entity_id) {
             recordingRef.current = null;
             setRecordingSession(null);
@@ -225,14 +235,15 @@ export function App() {
             setNativeViews((current) => current.filter((view) => view.view_id !== event.entity_id));
             setActiveNativeViewId((current) => current === event.entity_id ? null : current);
           }
-          if (event.event_type.startsWith('content.')) {
+          if (isContentProjectionEvent) {
             delete contentHeadsRef.current[event.entity_id];
             setNativeContentHeads({...contentHeadsRef.current});
             setNativeProjections((current) => {const next = {...current}; delete next[event.entity_id]; return next;});
           }
           continue;
         }
-        const response = await activeRuntime.adapter.invoke('content.get', {entity_id: event.entity_id, revision_id: event.revision_id, selector: null}, makeEnvelope('content.get'));
+        if (isContentProjectionEvent) projectionGate.current.begin(event.entity_id, event.revision_id);
+        const response = await activeRuntime.adapter.invoke('content.get', {entity_id: event.entity_id, revision_id: event.revision_id, selector: null}, makeEnvelope('content.get', undefined, {[event.entity_id]: event.revision_id}));
         if (response.status === 'error') throw new Error(`事件 ${event.event_type} 的 content.get 失败：${response.error?.message ?? response.error?.code ?? 'unknown error'}`);
         if (isRecordingCoverageEvent) {
           const coverageRecord = asRecord(response.result);
@@ -284,10 +295,14 @@ export function App() {
           if (!nextLesson) throw new Error(`事件 ${event.event_type} 的 content.get 未返回合法 Lesson`);
           lessonRef.current = nextLesson;
           setLesson(nextLesson);
-        } else if (event.event_type.startsWith('content.')) {
+        } else if (isContentProjectionEvent) {
+          const responseRevision = nativeProjectionRevision(response.result, null);
+          if (responseRevision !== event.revision_id) throw new Error(`事件 ${event.event_type} 的 content.get 返回 revision ${responseRevision ?? 'unknown'}，期待 ${event.revision_id}`);
+          const nextProjection = detectNativeProjection(response.result, event.entity_id, event.revision_id);
+          if (nextProjection.revisionId !== event.revision_id) throw new Error(`事件 ${event.event_type} 的 projection revision 未回填为 ${event.revision_id}`);
           contentHeadsRef.current[event.entity_id] = response.result;
           setNativeContentHeads({...contentHeadsRef.current});
-          setNativeProjections((current) => ({...current, [event.entity_id]: detectNativeProjection(response.result, event.entity_id, event.revision_id)}));
+          setNativeProjections((current) => ({...current, [event.entity_id]: nextProjection}));
         } else if (isViewEvent) {
           const nextView = parseContentViewResponse(response.result);
           if (!nextView) throw new Error(`事件 ${event.event_type} 的 content.get 未返回合法 ContentView`);
@@ -357,8 +372,9 @@ export function App() {
         courseRef.current = library.course;
         lessonRef.current = library.lesson;
         recordingRef.current = library.recording;
-        contentHeadsRef.current = {};
-        setNativeContentHeads({});
+        const snapshotHeads = extractContentHeadsFromSnapshot(nextRuntime.state.snapshot);
+        contentHeadsRef.current = snapshotHeads;
+        setNativeContentHeads(snapshotHeads);
         setNativeProjections(extractProjectionsFromSnapshot(nextRuntime.state.snapshot));
         const snapshotViews = extractViewsFromSnapshot(nextRuntime.state.snapshot);
         const readyViews = nextRuntime.readyView ? [...snapshotViews.filter((view) => view.view_id !== nextRuntime.readyView?.view_id), nextRuntime.readyView] : snapshotViews;
@@ -401,11 +417,24 @@ export function App() {
       } else {
         continue;
       }
-      if (nativeProjections[key]) continue;
-      const token = projectionGate.current.begin(key);
+      const currentProjection = nativeProjections[key];
+      if (currentProjection && (revisionId === null || currentProjection.revisionId === revisionId)) continue;
+      const token = projectionGate.current.begin(key, revisionId);
+      if (currentProjection && revisionId !== null && currentProjection.revisionId !== revisionId) {
+        setNativeProjections((current) => current[key] === currentProjection ? (() => {const next = {...current}; delete next[key]; return next;})() : current);
+      }
       void adapter.invoke('content.get', {entity_id: key, revision_id: revisionId, selector}, makeEnvelope('content.get', undefined, revisionId ? {[key]: revisionId} : {})).then((response) => {
-        if (!projectionGate.current.accepts(key, token) || response.status === 'error' || !response.result) return;
-        setNativeProjections((current) => ({...current, [key]: detectNativeProjection(response.result, key, revisionId)}));
+        const responseRevision = response.status === 'error' ? null : nativeProjectionRevision(response.result, null);
+        if (!projectionGate.current.accepts(key, token, responseRevision) || response.status === 'error' || !response.result) return;
+        if (revisionId !== null && responseRevision !== revisionId) {
+          setNativeNotice(`内容 ${key} 的 content.get 返回旧 revision；已丢弃旧投影，等待宿主重试。`);
+          return;
+        }
+        const nextProjection = detectNativeProjection(response.result, key, revisionId);
+        if (revisionId !== null && nextProjection.revisionId !== revisionId) return;
+        contentHeadsRef.current[key] = response.result;
+        setNativeContentHeads({...contentHeadsRef.current});
+        setNativeProjections((current) => ({...current, [key]: nextProjection}));
       });
     }
   }, [adapter, nativeProjections, nativeViews, runtime?.mode]);

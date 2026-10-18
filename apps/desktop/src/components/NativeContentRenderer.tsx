@@ -5,6 +5,7 @@ import {makeEnvelope} from '../app/hostAdapter.ts';
 import type {NativeProjection} from '../nativeContentProjection.ts';
 import {StatusBadge} from './StatusBadge.tsx';
 import {extractNativeProjectionActions, type NativeProjectionActions, type NativeTextPatchTarget} from './nativeProjectionActions.ts';
+import {NativeVisualization2D} from '../visualizations/NativeVisualization2D.tsx';
 
 function objectRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' ? value as Record<string, unknown> : null;
@@ -19,7 +20,7 @@ function textFromRuns(value: unknown): string {
   }).join('');
 }
 
-function ObjectPreview({object}: {object: unknown}) {
+function ObjectPreview({object, adapter, view}: {object: unknown; adapter?: HostAdapter; view: ContentView | null}) {
   const record = objectRecord(object);
   if (!record) return null;
   const type = typeof record.type === 'string' ? record.type : 'unknown';
@@ -47,8 +48,8 @@ function ObjectPreview({object}: {object: unknown}) {
   }
   if (type === 'interactive_visualization') {
     const visualization = objectRecord(content);
-    const status = visualization?.generation_status === 'unsupported' ? 'unsupported' : visualization?.generation_status === 'ready' ? 'ready' : 'partial';
-    return <div className="native-object-preview"><StatusBadge tone={status === 'ready' ? 'success' : status === 'unsupported' ? 'danger' : 'warning'}>{status}</StatusBadge><p>交互组件数据已保留，当前承载等待对应 visualization renderer。</p></div>;
+    if (!adapter) return <div className="native-object-preview"><StatusBadge tone="warning">native only</StatusBadge><p>交互组件需要真实 native adapter 才能请求 N 计算。</p></div>;
+    return <div className="native-object-preview"><NativeVisualization2D value={visualization} adapter={adapter} view={view} /></div>;
   }
   return <div className="native-object-preview"><StatusBadge tone="warning">{type}</StatusBadge><p>该对象暂不支持编辑展示，原始结构已保留。</p></div>;
 }
@@ -151,11 +152,11 @@ export function NativeContentRenderer({projection, adapter, view = null}: {proje
   if (projection.kind === 'material') {
     const pages = Array.isArray(value?.pages) ? value.pages : [];
     const objects = Array.isArray(value?.objects) ? value.objects : [];
-    return <div className="native-projection-body">{projectionState}{actions}<div className="native-material-meta"><span>format focaus.material/2.0.0</span><span>parse {String(value?.parse_version_id ?? projection.revisionId ?? 'unknown')}</span><span>{pages.length} 页 · {objects.length} 个对象</span></div><div className="native-pages-list">{pages.slice(0, 8).map((page, index) => {const item = objectRecord(page); const status = typeof item?.status === 'string' ? item.status : 'unknown'; return <div key={String(item?.page_id ?? index)} className="native-page-row"><strong>{String(item?.display_label ?? `第 ${index + 1} 页`)}</strong><StatusBadge tone={status === 'complete' ? 'success' : status === 'unsupported' || status === 'failed' ? 'danger' : 'warning'}>{status}</StatusBadge></div>;})}</div><div className="native-object-list">{objects.slice(0, 12).map((object, index) => <ObjectPreview key={String(objectRecord(object)?.object_id ?? index)} object={object} />)}</div></div>;
+    return <div className="native-projection-body">{projectionState}{actions}<div className="native-material-meta"><span>format focaus.material/2.0.0</span><span>parse {String(value?.parse_version_id ?? projection.revisionId ?? 'unknown')}</span><span>{pages.length} 页 · {objects.length} 个对象</span></div><div className="native-pages-list">{pages.slice(0, 8).map((page, index) => {const item = objectRecord(page); const status = typeof item?.status === 'string' ? item.status : 'unknown'; return <div key={String(item?.page_id ?? index)} className="native-page-row"><strong>{String(item?.display_label ?? `第 ${index + 1} 页`)}</strong><StatusBadge tone={status === 'complete' ? 'success' : status === 'unsupported' || status === 'failed' ? 'danger' : 'warning'}>{status}</StatusBadge></div>;})}</div><div className="native-object-list">{objects.slice(0, 12).map((object, index) => <ObjectPreview key={String(objectRecord(object)?.object_id ?? index)} object={object} adapter={adapter} view={view} />)}</div></div>;
   }
   if (projection.kind === 'note') {
     const objects = Array.isArray(value?.objects) ? value.objects : [];
-    return <div className="native-projection-body">{projectionState}{actions}<div className="native-material-meta"><span>note {String(value?.note_id ?? projection.key)}</span><span>revision {String(value?.revision_id ?? projection.revisionId ?? 'unknown')}</span><span>{objects.length} 个对象</span></div><div className="native-object-list">{objects.map((object, index) => <ObjectPreview key={String(objectRecord(object)?.object_id ?? index)} object={object} />)}</div></div>;
+    return <div className="native-projection-body">{projectionState}{actions}<div className="native-material-meta"><span>note {String(value?.note_id ?? projection.key)}</span><span>revision {String(value?.revision_id ?? projection.revisionId ?? 'unknown')}</span><span>{objects.length} 个对象</span></div><div className="native-object-list">{objects.map((object, index) => <ObjectPreview key={String(objectRecord(object)?.object_id ?? index)} object={object} adapter={adapter} view={view} />)}</div></div>;
   }
   if (projection.kind === 'raw' || projection.kind === 'secondary') {
     const listKey = projection.kind === 'raw' ? 'utterances' : 'segments';

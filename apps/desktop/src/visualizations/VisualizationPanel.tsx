@@ -3,7 +3,7 @@ import {Button, Card} from '@heroui/react';
 import type {EvaluationResult, HostAdapter, VisualizationEvaluateInput} from '@focaus/contracts';
 import {ids} from '../app/fixtures.ts';
 import {makeEnvelope} from '../app/hostAdapter.ts';
-import {evaluateConv2d, type Conv2dParameters, type FixtureEvaluation} from './math.ts';
+import {parseEvaluationResult, type Conv2dParameters, type FixtureEvaluation} from './math.ts';
 import {StatusBadge} from '../components/StatusBadge.tsx';
 
 const initialParameters: Conv2dParameters = {
@@ -23,7 +23,16 @@ function formatNumber(value: number): string {
   return Number.isInteger(value) ? String(value) : value.toFixed(3);
 }
 
-function asFixtureEvaluation(result: EvaluationResult): FixtureEvaluation {
+type EvaluationChecks = EvaluationResult['validation']['checks'];
+type EvaluationView = FixtureEvaluation & {checks: EvaluationChecks; parametersHash: string};
+
+function ValidationBadge({value}: {value: EvaluationChecks[keyof EvaluationChecks] | undefined}) {
+  const tone = value === 'pass' ? 'success' : value === 'fail' ? 'danger' : 'warning';
+  return <StatusBadge tone={tone}>{value ?? 'pending'}</StatusBadge>;
+}
+
+function asFixtureEvaluation(result: EvaluationResult): EvaluationView {
+  const checks = result.validation.checks;
   return {
     interaction_seq: result.interaction_seq,
     shape: [result.shape[0] ?? 0, result.shape[1] ?? 0],
@@ -37,8 +46,10 @@ function asFixtureEvaluation(result: EvaluationResult): FixtureEvaluation {
       bias: step.bias,
       sum: step.sum,
     })),
-    valid: result.validation.checks.math === 'pass',
+    valid: Object.values(checks).every((value) => value === 'pass'),
     diagnostics: result.validation.diagnostics,
+    checks,
+    parametersHash: result.parameters_hash,
   };
 }
 
@@ -125,7 +136,7 @@ function Conv3DView({
 
 export function VisualizationPanel({adapter}: {adapter: HostAdapter}) {
   const [parameters, setParameters] = useState(initialParameters);
-  const [evaluation, setEvaluation] = useState<FixtureEvaluation | null>(null);
+  const [evaluation, setEvaluation] = useState<EvaluationView | null>(null);
   const [interactionSeq, setInteractionSeq] = useState(0);
   const [selectedOutput, setSelectedOutput] = useState(0);
   const [status, setStatus] = useState<'idle' | 'draft' | 'evaluating' | 'ready' | 'error' | 'suspended'>('idle');
@@ -133,6 +144,8 @@ export function VisualizationPanel({adapter}: {adapter: HostAdapter}) {
   const [isReducedMotion, setIsReducedMotion] = useState(false);
   const [isVisible, setIsVisible] = useState(true);
   const initialRun = useRef(false);
+  const interactionSeqRef = useRef(0);
+  const latestEvaluationSeq = useRef(0);
 
   useEffect(() => {
     const media = window.matchMedia('(prefers-reduced-motion: reduce)');
@@ -149,7 +162,9 @@ export function VisualizationPanel({adapter}: {adapter: HostAdapter}) {
   }, []);
 
   const runEvaluation = async (nextParameters: Conv2dParameters) => {
-    const nextSeq = interactionSeq + 1;
+    const nextSeq = interactionSeqRef.current + 1;
+    interactionSeqRef.current = nextSeq;
+    latestEvaluationSeq.current = nextSeq;
     setInteractionSeq(nextSeq);
     setStatus('evaluating');
     setError('');
@@ -161,17 +176,30 @@ export function VisualizationPanel({adapter}: {adapter: HostAdapter}) {
       algorithm_version: '1.0.0',
     };
     try {
-      const response = await adapter.invoke('visualization.evaluate', payload, makeEnvelope('visualization.evaluate'));
+      const response = await adapter.invoke('visualization.evaluate', payload, makeEnvelope('visualization.evaluate', undefined, {[payload.object_id]: payload.revision_id}));
+      if (latestEvaluationSeq.current !== nextSeq) return;
+      if (response.status === 'accepted' && !response.result) {
+        setStatus('evaluating');
+        setError('宿主已接受 evaluate task，等待 visualization.changed；保留最后一次合法结果。');
+        return;
+      }
       if (response.status !== 'ok' || !response.result) {
         setStatus('error');
         setError('宿主没有返回完整 evaluate 结果；保留最后一次合法结果。');
         return;
       }
-      const nextEvaluation = asFixtureEvaluation(response.result as EvaluationResult);
+      const parsed = parseEvaluationResult(response.result, {objectId: payload.object_id, revisionId: payload.revision_id, interactionSeq: nextSeq, algorithmVersion: payload.algorithm_version});
+      if (!parsed) {
+        setStatus('error');
+        setError('宿主返回的 evaluate 结果不符合当前 2D contract；保留最后一次合法结果。');
+        return;
+      }
+      const nextEvaluation = asFixtureEvaluation(parsed);
       setEvaluation(nextEvaluation);
       setSelectedOutput((current) => Math.min(current, Math.max(0, nextEvaluation.values.length - 1)));
       setStatus('ready');
     } catch (reason) {
+      if (latestEvaluationSeq.current !== nextSeq) return;
       setStatus('error');
       setError(reason instanceof Error ? reason.message : 'evaluate 失败；保留最后一次合法结果。');
     }
@@ -219,6 +247,7 @@ export function VisualizationPanel({adapter}: {adapter: HostAdapter}) {
       <div className="visualization-guardrail">
         <span className="fixture-label">fixture adapter · 由确定性 N 替身返回数据</span>
         <span>画面不会自行推断数学结果；参数 hash、shape、逐格步骤来自 visualization.evaluate。</span>
+        <span>interaction_seq：{interactionSeq}</span>
         <span>{isReducedMotion ? '已启用 reduced motion：不自动播放。' : '无自动播放；每一步都可用键盘/按钮选择。'}</span>
       </div>
       {error ? <div className="error-notice" role="alert">{error}</div> : null}
@@ -299,12 +328,13 @@ export function VisualizationPanel({adapter}: {adapter: HostAdapter}) {
           </Card.Header>
           <Card.Content>
             <div className="validation-list">
-              <span>Schema</span><StatusBadge tone={evaluation?.valid ? 'success' : 'warning'}>{evaluation?.valid ? 'pass' : 'pending'}</StatusBadge>
-              <span>来源</span><StatusBadge tone="success">pass</StatusBadge>
-              <span>语义</span><StatusBadge tone="success">pass</StatusBadge>
-              <span>数学</span><StatusBadge tone={evaluation?.valid ? 'success' : 'warning'}>{evaluation?.valid ? 'pass' : 'pending'}</StatusBadge>
+              <span>Schema</span><ValidationBadge value={evaluation?.checks.schema} />
+              <span>来源</span><ValidationBadge value={evaluation?.checks.source} />
+              <span>语义</span><ValidationBadge value={evaluation?.checks.semantic} />
+              <span>数学</span><ValidationBadge value={evaluation?.checks.math} />
             </div>
             <p className="muted-copy">{evaluation?.diagnostics.join('；') ?? '等待确定性校验报告'}</p>
+            <p className="source-line">parameters_hash：{evaluation?.parametersHash ?? '等待返回'}</p>
             <p className="source-line">semantic_key：conv2d_spatial·fixture-demo</p>
             <p className="source-line">value_origin：demonstration · user_override=false</p>
           </Card.Content>

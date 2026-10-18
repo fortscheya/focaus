@@ -371,6 +371,14 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .native-object-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .native-object-preview { min-width: 0; padding: 10px; border: 1px solid var(--app-border); border-radius: 9px; background: var(--app-surface-secondary); }
 .native-object-preview p { margin: 8px 0 0; color: var(--app-muted); font-size: 11px; line-height: 1.55; }
+.native-visualization-2d { display: grid; gap: 10px; }
+.native-visualization-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.native-visualization-heading > div { display: grid; min-width: 0; gap: 5px; }
+.native-visualization-heading > div > span:last-child { overflow: hidden; color: var(--app-muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.native-visualization-2d .tensor-row { grid-template-columns: minmax(54px, 1fr) 18px minmax(44px, .8fr) 18px minmax(54px, 1fr); gap: 6px; }
+.native-visualization-2d .tensor-cell { font-size: 9px; }
+.native-visualization-unavailable { display: grid; gap: 7px; }
+.native-visualization-unavailable p { margin: 0; }
 .native-formula-text { color: var(--app-foreground) !important; font-family: Georgia, serif; font-size: 15px !important; }
 .native-table-preview { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; margin-top: 9px; }
 .native-table-preview span { min-width: 0; padding: 6px 4px; overflow: hidden; border: 1px solid var(--app-border); border-radius: 4px; background: var(--app-surface); color: var(--app-foreground); font-size: 10px; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
