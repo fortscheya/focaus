@@ -1,7 +1,10 @@
 import {useCallback, useEffect, useRef, useState} from 'react';
 import {Button, Description, Input, Label, TextField} from '@heroui/react';
-import type {ContentView, HostAdapter, SearchHit, SearchOpenInput, SearchPage, SearchQueryInput, SearchRefreshInput, SearchSession} from '@focaus/contracts';
+import type {ContentView, HostAdapter, SearchAnchor, SearchHit, SearchOpenInput, SearchPage, SearchQueryInput, SearchRefreshInput, SearchSession, Selector} from '@focaus/contracts';
 import {makeEnvelope} from '../app/hostAdapter.ts';
+import {detectNativeProjection, type NativeProjection} from '../nativeContentProjection.ts';
+import {NativeContentRenderer} from './NativeContentRenderer.tsx';
+import {StatusBadge} from './StatusBadge.tsx';
 
 function record(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
@@ -25,6 +28,14 @@ function asSearchHit(value: unknown): SearchHit | null {
   return item && typeof item.hit_id === 'string' && typeof item.search_unit_id === 'string' && typeof item.revision_id === 'string' && anchor && typeof anchor.field_path === 'string' && range && typeof range.start === 'number' && typeof range.end === 'number' ? value as SearchHit : null;
 }
 
+function asSearchAnchor(value: unknown): SearchAnchor | null {
+  const item = record(value);
+  const selector = record(item?.selector);
+  const range = record(item?.scalar_range);
+  if (!item || typeof item.owner_entity_id !== 'string' || typeof item.revision_id !== 'string' || !selector || typeof selector.kind !== 'string' || !range || typeof range.start !== 'number' || typeof range.end !== 'number' || typeof item.field_path !== 'string' || !Array.isArray(item.audio_spans) || item.fallback !== null && typeof item.fallback !== 'string') return null;
+  return {...item, selector: selector as Selector, scalar_range: {start: range.start, end: range.end}, audio_spans: item.audio_spans.filter((id): id is string => typeof id === 'string')} as SearchAnchor;
+}
+
 function responseError(response: {status: string; error?: {message?: string; code?: string}}): string | null {
   return response.status === 'error' ? response.error?.message ?? response.error?.code ?? '宿主命令失败。' : null;
 }
@@ -39,6 +50,7 @@ export function NativeSearchPanel({adapter, open, view, onClose}: {adapter: Host
   const [query, setQuery] = useState('');
   const [notice, setNotice] = useState('');
   const [selectedHitId, setSelectedHitId] = useState<string | null>(null);
+  const [sourceJump, setSourceJump] = useState<{anchor: SearchAnchor; projection: NativeProjection | null; message: string} | null>(null);
   const [busy, setBusy] = useState<'query' | 'locate' | 'refresh' | 'page' | null>(null);
   const querySeq = useRef(0);
   const generation = useRef(0);
@@ -68,6 +80,7 @@ export function NativeSearchPanel({adapter, open, view, onClose}: {adapter: Host
     setPage(null);
     setQuery('');
     setSelectedHitId(null);
+    setSourceJump(null);
     setNotice('');
     setBusy(null);
     querySeq.current = 0;
@@ -127,6 +140,7 @@ export function NativeSearchPanel({adapter, open, view, onClose}: {adapter: Host
     setQuery(value);
     setPage(null);
     setSelectedHitId(null);
+    setSourceJump(null);
     const targetSession = sessionRef.current;
     if (!targetSession) {
       setNotice('SearchSession 尚未准备好；查询不会回退到 fixture。');
@@ -169,8 +183,20 @@ export function NativeSearchPanel({adapter, open, view, onClose}: {adapter: Host
       setNotice('search.locate 失败：' + error);
       return;
     }
-    const anchor = record(response.result);
-    setNotice(anchor && typeof anchor.field_path === 'string' ? '宿主已校验定位：' + anchor.field_path + ' · revision ' + hit.revision_id : '宿主已校验该命中锚点。');
+    const anchor = asSearchAnchor(response.result);
+    if (!anchor) {
+      setNotice('search.locate 返回缺少合法 SearchAnchor；不会猜测来源实体或 selector。');
+      return;
+    }
+    setSourceJump({anchor, projection: null, message: '已校验来源锚点，正在读取 source content…'});
+    const sourceResponse = await adapter.invoke('content.get', {entity_id: anchor.owner_entity_id, revision_id: anchor.revision_id, selector: anchor.selector}, makeEnvelope('content.get', view.host_window_id, {[view.view_id]: view.view_revision, [anchor.owner_entity_id]: anchor.revision_id}));
+    const sourceError = responseError(sourceResponse);
+    if (sourceError || sourceResponse.status === 'accepted' || sourceResponse.status === 'error' || !sourceResponse.result) {
+      setSourceJump({anchor, projection: null, message: sourceError ? '来源读取失败：' + sourceError : '来源 content.get 尚未返回可显示 projection。'});
+      return;
+    }
+    const projection = detectNativeProjection(sourceResponse.result, anchor.owner_entity_id, anchor.revision_id);
+    setSourceJump({anchor, projection, message: '来源已读取：' + anchor.field_path + ' · revision ' + anchor.revision_id});
   };
 
   const refresh = async () => {
@@ -218,6 +244,7 @@ export function NativeSearchPanel({adapter, open, view, onClose}: {adapter: Host
     </TextField>
     {notice ? <div className="search-notice" role="status">{notice}</div> : null}
     {page ? <div className="search-result-summary"><strong>{page.total_count}</strong><span>个真实命中 · {page.count_status} · coverage {page.coverage.state}</span></div> : null}
+    {sourceJump ? <section className="native-search-source-jump" aria-label="已定位来源"><div className="native-search-source-heading"><div><strong>已定位来源</strong><span>{sourceJump.anchor.field_path} · {sourceJump.anchor.owner_entity_id}</span></div><StatusBadge tone={sourceJump.projection ? 'success' : 'warning'}>{sourceJump.projection ? '已读取' : '校验中'}</StatusBadge></div><p className="native-command-feedback">{sourceJump.message}</p>{sourceJump.projection ? <NativeContentRenderer projection={sourceJump.projection} adapter={adapter} view={view} /> : null}</section> : null}
     <div className="search-results native-search-results" role="list" aria-label="真实搜索结果">
       {page?.hits.map((hit) => <button key={hit.hit_id} type="button" className={'native-search-hit ' + (selectedHitId === hit.hit_id ? 'is-selected' : '')} onClick={() => void locate(hit)} disabled={busy === 'locate'} role="listitem">
         <strong>{hitLabel(hit)}</strong><span>{hit.nav_kind} · revision {hit.revision_id}</span><small>{hit.matched_anchor.field_path} · {hit.ranges.length} 个范围</small>

@@ -24,6 +24,17 @@ function projectionTone(status: NonNullable<NativePaneSlot['projection']>['statu
   return 'neutral';
 }
 
+function projectionReason(projection: NativeProjection | null): string {
+  if (!projection) return '宿主尚未返回当前 projection';
+  const value = projection.value && typeof projection.value === 'object' ? projection.value as Record<string, unknown> : null;
+  const reason = value?.reason ?? value?.unsupported_reason ?? value?.error ?? value?.completion_reason;
+  if (typeof reason === 'string') return reason;
+  if (projection.status === 'partial') return '宿主只完成部分页/区域，未处理范围仍保留。';
+  if (projection.status === 'failed') return '宿主 projection 失败，旧内容不会被伪装成新结果。';
+  if (projection.status === 'unsupported') return '当前宿主能力不支持此内容类型，原始结构仍保留。';
+  return '宿主已返回结构化内容。';
+}
+
 function NativeLayerSummary({projections}: {projections: Record<string, NativeProjection>}) {
   const layers = [
     {kind: 'raw', label: '原始证据', detail: '只读底稿与音频时间坐标'},
@@ -33,7 +44,9 @@ function NativeLayerSummary({projections}: {projections: Record<string, NativePr
   return <section className="native-layer-summary" aria-label="真实三层内容状态">{layers.map((layer) => {
     const projection = Object.values(projections).find((item) => item.kind === layer.kind);
     const status = projection?.status ?? null;
-    return <Card key={layer.kind} className="native-layer-card" variant="tertiary"><Card.Content><div className="native-layer-card-heading"><strong>{layer.label}</strong><StatusBadge tone={status ? projectionTone(status) : 'neutral'}>{status ?? '等待'}</StatusBadge></div><span>{layer.detail}</span><small>{projection?.revisionId ? 'revision ' + projection.revisionId : '宿主尚未返回当前 projection'}</small></Card.Content></Card>;
+    const value = projection?.value && typeof projection.value === 'object' ? projection.value as Record<string, unknown> : null;
+    const sourceCount = Array.isArray(value?.source_refs) ? value.source_refs.length : 0;
+    return <Card key={layer.kind} className="native-layer-card" variant="tertiary"><Card.Content><div className="native-layer-card-heading"><strong>{layer.label}</strong><StatusBadge tone={status ? projectionTone(status) : 'neutral'}>{status ?? '等待'}</StatusBadge></div><span>{status ? projectionReason(projection ?? null) : layer.detail}</span><small>{projection?.revisionId ? 'revision ' + projection.revisionId + ' · source refs ' + sourceCount : '宿主尚未返回当前 projection'}</small></Card.Content></Card>;
   })}</section>;
 }
 

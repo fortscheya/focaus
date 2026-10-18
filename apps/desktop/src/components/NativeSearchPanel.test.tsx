@@ -73,8 +73,8 @@ beforeEach(() => {
     mode: 'native',
     invoke: vi.fn(async (name, payload, envelope) => {
       calls.push({name, payload, envelope: envelope as Record<string, unknown>});
-      const result = name === 'search.open' ? session : name === 'search.page' ? page : name === 'search.locate' ? {field_path: 'objects[0].text'} : undefined;
-      return {contract_version: '2.0.0', command_id: envelope.command_id, status: name === 'search.close' ? 'ok' : 'accepted', result, committed_revisions: {}, event_seq: 1};
+      const result = name === 'search.open' ? session : name === 'search.page' ? page : name === 'search.locate' ? page.hits[0].matched_anchor : name === 'content.get' ? {note_id: 'note-1', revision_id: 'note-r1', objects: [], status: 'complete'} : undefined;
+      return {contract_version: '2.0.0', command_id: envelope.command_id, status: name === 'search.close' || name === 'content.get' ? 'ok' : 'accepted', result, committed_revisions: {}, event_seq: 1};
     }),
   } as HostAdapter;
   host = document.createElement('div'); document.body.append(host); root = createRoot(host);
@@ -98,8 +98,11 @@ describe('native search command loop', () => {
     expect(host.textContent).toContain('真实结果');
     act(() => {host.querySelector<HTMLButtonElement>('.native-search-hit')!.click();});
     await flush();
-    expect(calls.at(-1)?.name).toBe('search.locate');
-    expect((calls.at(-1)?.envelope.expected_revisions as Record<string, string>)['view-1']).toBe('view-r1');
+    expect(calls.at(-2)?.name).toBe('search.locate');
+    expect((calls.at(-2)?.envelope.expected_revisions as Record<string, string>)['view-1']).toBe('view-r1');
+    expect(calls.at(-1)?.name).toBe('content.get');
+    expect((calls.at(-1)?.envelope.expected_revisions as Record<string, string>)['note-1']).toBe('note-r1');
+    expect(host.textContent).toContain('来源已读取');
     act(() => {[...host.querySelectorAll('button')].find((button) => button.textContent === '刷新')?.click();});
     await flush();
     expect(calls.some((call) => call.name === 'search.refresh')).toBe(true);
