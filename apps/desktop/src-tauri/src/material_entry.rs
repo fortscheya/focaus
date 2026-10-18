@@ -18,6 +18,13 @@ use std::{
     time::Duration,
 };
 
+/// A user may need to navigate a file provider or mounted volume before
+/// choosing a material. Keep the native command bounded, but leave enough
+/// time for ordinary manual selection instead of treating it as a 15-second
+/// background operation.
+const PICKER_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const PICKER_TIMEOUT_MESSAGE: &str = "Native material picker timed out after 5 minutes";
+
 #[derive(Debug, Clone, Serialize)]
 pub struct MaterialJobHandle {
     pub task_id: String,
@@ -340,14 +347,24 @@ fn pick_file(app: &tauri::AppHandle) -> Result<Option<PickedFile>, SafeError> {
             "Cannot open native file picker",
         )
     })?;
-    receiver
-        .recv_timeout(Duration::from_secs(15))
-        .map_err(|_| {
-            error(
-                focaus_contracts::ErrorCode::InvalidResult,
-                "Native file picker timed out",
-            )
-        })?
+    receive_picker_result(receiver, PICKER_RESPONSE_TIMEOUT)
+}
+
+fn receive_picker_result<T>(
+    receiver: mpsc::Receiver<Result<T, SafeError>>,
+    timeout: Duration,
+) -> Result<T, SafeError> {
+    match receiver.recv_timeout(timeout) {
+        Ok(result) => result,
+        Err(mpsc::RecvTimeoutError::Timeout) => Err(error(
+            focaus_contracts::ErrorCode::DeadlineExceeded,
+            PICKER_TIMEOUT_MESSAGE,
+        )),
+        Err(mpsc::RecvTimeoutError::Disconnected) => Err(error(
+            focaus_contracts::ErrorCode::InvalidResult,
+            "Native file picker callback disconnected",
+        )),
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -413,6 +430,9 @@ fn pick_file_on_main_thread() -> Result<Option<PickedFile>, SafeError> {
             )
         })?
         .to_owned();
+    // Open the descriptor while the security-scoped extension is active. The
+    // descriptor, rather than this path, crosses into MaterialService, so the
+    // scope can be released before returning from the main-thread callback.
     let scoped = unsafe { url.startAccessingSecurityScopedResource() };
     let file = File::open(&path).map_err(crate::storage::io_error);
     if scoped {
@@ -455,6 +475,28 @@ mod tests {
         assert_eq!(
             verify_capabilities(&no_search).unwrap_err().code,
             focaus_contracts::ErrorCode::UnsupportedVersion
+        );
+    }
+
+    #[test]
+    fn picker_wait_is_bounded_and_distinguishes_timeout_from_callback_disconnect() {
+        assert!(PICKER_RESPONSE_TIMEOUT > Duration::from_secs(15));
+        assert!(PICKER_RESPONSE_TIMEOUT <= Duration::from_secs(10 * 60));
+
+        let (_sender, receiver) = mpsc::sync_channel::<Result<(), SafeError>>(1);
+        let timed_out = receive_picker_result(receiver, Duration::from_millis(1)).unwrap_err();
+        assert_eq!(
+            timed_out.code,
+            focaus_contracts::ErrorCode::DeadlineExceeded
+        );
+        assert_eq!(timed_out.message, PICKER_TIMEOUT_MESSAGE);
+
+        let (sender, receiver) = mpsc::sync_channel::<Result<(), SafeError>>(1);
+        drop(sender);
+        let disconnected = receive_picker_result(receiver, Duration::from_millis(1)).unwrap_err();
+        assert_eq!(
+            disconnected.code,
+            focaus_contracts::ErrorCode::InvalidResult
         );
     }
 }
