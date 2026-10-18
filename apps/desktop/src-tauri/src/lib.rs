@@ -6,6 +6,9 @@ pub const INITIAL_MIGRATION: &str = include_str!("../migrations/0001_initial.sql
 pub mod wire;
 
 #[cfg(feature = "native-shell")]
+pub mod material_entry;
+
+#[cfg(feature = "native-shell")]
 pub mod shell;
 
 // C composition root: the native modules own durable state and are always

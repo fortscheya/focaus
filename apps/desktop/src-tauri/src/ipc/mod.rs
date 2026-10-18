@@ -9,7 +9,7 @@ use focaus_contracts::*;
 use rusqlite::OptionalExtension;
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
-use std::{collections::BTreeMap, path::Path, sync::Mutex};
+use std::{collections::BTreeMap, fs::File, path::Path, sync::Mutex};
 
 #[derive(Clone)]
 struct WindowBinding {
@@ -627,6 +627,17 @@ impl NativeHost {
     ) -> Result<crate::library::materials::MaterialJob> {
         self.materials
             .import_original(path, lesson_id, purpose, pages)
+    }
+    pub fn import_material_original_file(
+        &self,
+        source: File,
+        display_name: &str,
+        lesson_id: &str,
+        purpose: MaterialImportInputPurpose,
+        pages: Vec<u64>,
+    ) -> Result<crate::library::materials::MaterialJob> {
+        self.materials
+            .import_original_file(source, display_name, lesson_id, purpose, pages)
     }
     pub fn accept_material_result(&self, input: MaterialPageResultInput) -> Result<Value> {
         self.materials.accept(input)

@@ -22,12 +22,24 @@ unicode-normalization = "=0.1.22"
 tauri = { version = "2", optional = true, features = ["tray-icon"] }
 uuid = { version = "1", features = ["v4"], optional = true }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { version = "0.6.5", optional = true }
+objc2-app-kit = { version = "0.3.2", optional = true }
+objc2-foundation = { version = "0.3.2", optional = true }
+
 [build-dependencies]
 tauri-build = { version = "2", optional = true }
 
 [features]
 default = []
-native-shell = ["dep:tauri", "dep:tauri-build", "dep:uuid"]
+native-shell = [
+    "dep:tauri",
+    "dep:tauri-build",
+    "dep:uuid",
+    "dep:objc2",
+    "dep:objc2-app-kit",
+    "dep:objc2-foundation",
+]
 custom-protocol = ["tauri/custom-protocol"]
 
 [[bin]]

@@ -35,12 +35,14 @@ impl Drop for CopiedFiles {
 
 /// Host-to-engine capability. Do not forward input paths to the WebView, outbox,
 /// snapshots or backup. UI receives the task/material identifiers only.
+#[derive(Clone)]
 pub struct MaterialJob {
     pub task: Task,
     pub input: MaterialConvertInput,
     pub material_id: String,
     pub source_version_id: String,
     pub parse_version_id: String,
+    pub parent_parse_version_id: Option<String>,
 }
 impl MaterialJob {
     /// E's JSONL envelope carries host-derived identity coordinates alongside
@@ -53,6 +55,10 @@ impl MaterialJob {
         object.insert("material_id".into(), json!(self.material_id));
         object.insert("source_version_id".into(), json!(self.source_version_id));
         object.insert("parse_version_id".into(), json!(self.parse_version_id));
+        object.insert(
+            "parent_parse_version_id".into(),
+            json!(self.parent_parse_version_id),
+        );
         object.insert(
             "source_hash".into(),
             json!(self
@@ -74,12 +80,54 @@ impl MaterialJob {
 pub struct MaterialService {
     store: Store,
     accept_gate: Mutex<()>,
+    jobs: Mutex<BTreeMap<String, MaterialJob>>,
 }
+
+fn validate_publication_parent(
+    current_parse_version: Option<&str>,
+    parent_parse_version_id: Option<&str>,
+    parent_exists: bool,
+) -> Result<()> {
+    match (current_parse_version, parent_parse_version_id) {
+        (None, None) => Ok(()),
+        (Some(current), Some(parent)) if current == parent && parent_exists => Ok(()),
+        (Some(_), None) => Err(error(
+            ErrorCode::StaleInput,
+            "Published material requires its current parse parent",
+        )),
+        _ => Err(error(
+            ErrorCode::StaleInput,
+            "Material parse parent is not the current published version",
+        )),
+    }
+}
+
+fn validate_existing_parse_identity(
+    existing: (&str, &str, Option<&str>, &str),
+    material_id: &str,
+    source_version_id: &str,
+    parent_parse_version_id: Option<&str>,
+    content_hash: &str,
+) -> Result<()> {
+    if existing.0 == material_id
+        && existing.1 == source_version_id
+        && existing.2 == parent_parse_version_id
+        && existing.3 == content_hash
+    {
+        return Ok(());
+    }
+    Err(error(
+        ErrorCode::IdempotencyMismatch,
+        "Parse version ID reused for different package",
+    ))
+}
+
 impl MaterialService {
     pub fn new(store: Store) -> Self {
         Self {
             store,
             accept_gate: Mutex::new(()),
+            jobs: Mutex::new(BTreeMap::new()),
         }
     }
     /// C calls this after the native file picker grants access. This is not a
@@ -91,10 +139,38 @@ impl MaterialService {
         purpose: MaterialImportInputPurpose,
         pages: Vec<u64>,
     ) -> Result<MaterialJob> {
+        let source = File::open(path).map_err(io_error)?;
+        let display_name = path.file_name().and_then(|x| x.to_str()).ok_or_else(|| {
+            error(
+                ErrorCode::InvalidArgument,
+                "Material source name is invalid",
+            )
+        })?;
+        self.import_original_file(source, display_name, lesson, purpose, pages)
+    }
+    /// Import from a descriptor opened by the native picker while its
+    /// security-scoped access was active. The descriptor, rather than a path,
+    /// crosses into the worker so the WebView never supplies filesystem input.
+    pub fn import_original_file(
+        &self,
+        source: File,
+        display_name: &str,
+        lesson: &str,
+        purpose: MaterialImportInputPurpose,
+        pages: Vec<u64>,
+    ) -> Result<MaterialJob> {
         if self.store.read(|c| lifecycle(c, lesson))? != "active" {
             return Err(error(ErrorCode::SourceDeleted, "Import lesson unavailable"));
         }
-        let extension = path
+        if display_name.is_empty()
+            || Path::new(display_name).file_name().and_then(|x| x.to_str()) != Some(display_name)
+        {
+            return Err(error(
+                ErrorCode::InvalidArgument,
+                "Material source name is invalid",
+            ));
+        }
+        let extension = Path::new(display_name)
             .extension()
             .and_then(|x| x.to_str())
             .unwrap_or("")
@@ -114,7 +190,6 @@ impl MaterialService {
                 ))
             }
         };
-        let source = File::open(path).map_err(io_error)?;
         if !source.metadata().map_err(io_error)?.is_file() {
             return Err(error(
                 ErrorCode::InvalidArgument,
@@ -128,11 +203,7 @@ impl MaterialService {
         let relative = format!("resources/{resource}.{extension}");
         let (sha, length) =
             resources::persist_bytes(source, self.store.root(), &relative, 512 * 1024 * 1024)?;
-        let display = path
-            .file_name()
-            .and_then(|x| x.to_str())
-            .unwrap_or("Material")
-            .to_owned();
+        let display = display_name.to_owned();
         let result=self.store.write(|t| {
             if lifecycle(t,lesson)?!="active"{return Err(error(ErrorCode::SourceDeleted,"Import lesson was deleted"));}
             let body=commit_entity(t,&material,"material",json!({"material_id":material,"source_version_id":source_version,"resource_id":resource,"file_type":extension,"display_name":display,"parse_version_id":null,"revision_id":storage::id()}),"content.committed",json!({"kind":"lesson","lesson_id":lesson}),None,None)?;
@@ -174,7 +245,12 @@ impl MaterialService {
                 "Invalid conversion budget",
             ));
         }
-        let (source_version,relative,sha)=self.store.read(|c|c.query_row("SELECT m.source_version_id,r.relative_path,r.sha256 FROM materials m JOIN resources r ON r.resource_id=m.resource_id JOIN entities e ON e.entity_id=m.material_id WHERE m.material_id=?1 AND r.state='ready' AND e.lifecycle='active'",[material],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?))).optional().map_err(sql_error)?.ok_or_else(||error(ErrorCode::SourceUnavailable,"Managed original unavailable")))?;
+        let (source_version,relative,sha,parent_parse_version_id)=self.store.read(|c|{
+            let (source_version,relative,sha)=c.query_row("SELECT m.source_version_id,r.relative_path,r.sha256 FROM materials m JOIN resources r ON r.resource_id=m.resource_id JOIN entities e ON e.entity_id=m.material_id WHERE m.material_id=?1 AND r.state='ready' AND e.lifecycle='active'",[material],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?))).optional().map_err(sql_error)?.ok_or_else(||error(ErrorCode::SourceUnavailable,"Managed original unavailable"))?;
+            let current=head(c,material)?;
+            let parent=current["parse_version_id"].as_str().map(str::to_owned);
+            Ok((source_version,relative,sha,parent))
+        })?;
         let build = SnapshotBuildInput {
             purpose: TaskKind::MaterialConvert,
             target_id: material.into(),
@@ -214,6 +290,10 @@ impl MaterialService {
             checkpoint: BTreeMap::from([
                 ("parse_version_id".into(), json!(parse)),
                 ("source_version_id".into(), json!(source_version)),
+                (
+                    "parent_parse_version_id".into(),
+                    json!(parent_parse_version_id),
+                ),
                 ("profile".into(), json!(profile)),
                 ("pages".into(), json!(pages)),
             ]),
@@ -242,13 +322,44 @@ impl MaterialService {
             corrections,
             budget_ms,
         };
-        Ok(MaterialJob {
+        let job = MaterialJob {
             task,
             input,
             material_id: material.into(),
             source_version_id: source_version,
             parse_version_id: parse,
-        })
+            parent_parse_version_id,
+        };
+        self.jobs
+            .lock()
+            .map_err(|_| {
+                error(
+                    ErrorCode::InvalidResult,
+                    "Material job registry unavailable",
+                )
+            })?
+            .insert(job.task.task_id.clone(), job.clone());
+        Ok(job)
+    }
+    /// Return a host-owned job for the safe sidecar command. The caller only
+    /// supplies the task ID; source and staging paths remain inside this map.
+    pub fn job(&self, task_id: &str) -> Result<MaterialJob> {
+        self.jobs
+            .lock()
+            .map_err(|_| {
+                error(
+                    ErrorCode::InvalidResult,
+                    "Material job registry unavailable",
+                )
+            })?
+            .get(task_id)
+            .cloned()
+            .ok_or_else(|| {
+                error(
+                    ErrorCode::NotFound,
+                    "Material task is not attached to this host",
+                )
+            })
     }
     /// The JSONL adapter passes the manifest, never a caller-supplied staging path.
     /// Resources are opened under the task's pinned staging directory capability.
@@ -294,27 +405,66 @@ impl MaterialService {
                 "Manifest changed immutable original source",
             ));
         }
+        if manifest.format != "focaus.material" || manifest.format_version != "2.0.0" {
+            return Err(error(
+                ErrorCode::UnsupportedVersion,
+                "Material package format is unsupported",
+            ));
+        }
         let duplicate = self.store.read(|c| {
             c.query_row(
-                "SELECT content_hash FROM parse_versions WHERE parse_version_id=?1",
+                "SELECT material_id,source_version_id,parent_parse_version_id,content_hash FROM parse_versions WHERE parse_version_id=?1",
                 [&manifest.parse_version_id],
-                |r| r.get::<_, String>(0),
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, Option<String>>(2)?,
+                        r.get::<_, String>(3)?,
+                    ))
+                },
             )
             .optional()
             .map_err(sql_error)
         })?;
         let manifest_hash = canonical_hash(&storage::value(&manifest)?);
-        if let Some(hash) = duplicate {
-            if hash != manifest_hash {
-                return Err(error(
-                    ErrorCode::IdempotencyMismatch,
-                    "Parse version ID reused for different package",
-                ));
-            }
+        if let Some((material_id, source_version_id, parent_parse_version_id, hash)) = duplicate {
+            validate_existing_parse_identity(
+                (
+                    &material_id,
+                    &source_version_id,
+                    parent_parse_version_id.as_deref(),
+                    &hash,
+                ),
+                &manifest.material_id,
+                &manifest.source_version_id,
+                manifest.parent_parse_version_id.as_deref(),
+                &manifest_hash,
+            )?;
             return Ok(
                 json!({"material_id":manifest.material_id,"parse_version_id":manifest.parse_version_id,"publication":"committed","duplicate":true}),
             );
         }
+        let (current_parse_version, parent_exists) = self.store.read(|c| {
+            let current = head(c, &manifest.material_id)?;
+            let current_parse = current["parse_version_id"].as_str().map(str::to_owned);
+            let parent_exists = if let Some(parent) = manifest.parent_parse_version_id.as_deref() {
+                c.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM parse_versions WHERE parse_version_id=?1 AND material_id=?2 AND source_version_id=?3)",
+                    params![parent, manifest.material_id, manifest.source_version_id],
+                    |r| r.get::<_, bool>(0),
+                )
+                .map_err(sql_error)?
+            } else {
+                false
+            };
+            Ok((current_parse, parent_exists))
+        })?;
+        validate_publication_parent(
+            current_parse_version.as_deref(),
+            manifest.parent_parse_version_id.as_deref(),
+            parent_exists,
+        )?;
         let mut ids = BTreeSet::new();
         for id in manifest
             .pages
@@ -711,5 +861,60 @@ fn object_id(object: &MaterialObject) -> &String {
         MaterialObject::V5(x) => &x.object_id,
         MaterialObject::V6(x) => &x.object_id,
         MaterialObject::V7(x) => &x.object_id,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn first_publication_has_no_parent_and_republication_requires_current_parent() {
+        assert!(validate_publication_parent(None, None, false).is_ok());
+        assert!(validate_publication_parent(Some("current"), Some("current"), true).is_ok());
+        assert_eq!(
+            validate_publication_parent(Some("current"), None, false)
+                .unwrap_err()
+                .code,
+            ErrorCode::StaleInput
+        );
+        assert_eq!(
+            validate_publication_parent(Some("current"), Some("old"), true)
+                .unwrap_err()
+                .code,
+            ErrorCode::StaleInput
+        );
+        assert_eq!(
+            validate_publication_parent(Some("current"), Some("current"), false)
+                .unwrap_err()
+                .code,
+            ErrorCode::StaleInput
+        );
+    }
+
+    #[test]
+    fn duplicate_parse_version_is_idempotent_only_for_the_same_parent_and_package() {
+        assert!(validate_existing_parse_identity(
+            ("material", "source", Some("parent"), "hash"),
+            "material",
+            "source",
+            Some("parent"),
+            "hash",
+        )
+        .is_ok());
+        for (parent, hash) in [(Some("other"), "hash"), (Some("parent"), "changed")] {
+            assert_eq!(
+                validate_existing_parse_identity(
+                    ("material", "source", Some("parent"), "hash"),
+                    "material",
+                    "source",
+                    parent,
+                    hash,
+                )
+                .unwrap_err()
+                .code,
+                ErrorCode::IdempotencyMismatch
+            );
+        }
     }
 }
