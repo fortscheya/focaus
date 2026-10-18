@@ -10,3 +10,17 @@ fn wire_requires_explicit_nullable_identity_and_rejects_unknown_fields() {
     let mut unknown = wire; unknown["privileged"] = json!(true);
     assert!(decode_command(unknown).is_err());
 }
+
+#[test]
+fn valid_envelope_cannot_hide_wrong_concrete_output() {
+    use focaus_contracts::{CommandName, CommandResult};
+    use focaus_desktop::wire::{validate_command_result, validate_result};
+    let response:CommandResult=serde_json::from_value(json!({
+        "contract_version":"2.0.0","command_id":"00000000-0000-4000-8000-000000000001",
+        "status":"ok","result":{},"committed_revisions":{},"event_seq":0
+    })).unwrap();
+    assert!(validate_result(&response).is_ok());
+    assert!(validate_command_result(&CommandName::StateAck,&response).is_ok());
+    assert!(validate_command_result(&CommandName::ViewReady,&response).is_err());
+    assert!(validate_command_result(&CommandName::CourseCreate,&response).is_err());
+}

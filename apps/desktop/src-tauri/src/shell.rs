@@ -29,9 +29,10 @@ async fn focaus_command(window: tauri::WebviewWindow, state: tauri::State<'_, Ru
     let label = window.label().to_owned();
     // Synchronous SQLite transactions and validation never run on the UI thread.
     let should_exit = matches!(&command.name, focaus_contracts::CommandName::AppExit);
+    let command_name = command.name.clone();
     let result = tauri::async_runtime::spawn_blocking(move || host.dispatch_webview(&label, command))
         .await.map_err(|_| internal_error())??;
-    crate::wire::validate_result(&result)?;
+    crate::wire::validate_command_result(&command_name, &result)?;
     if should_exit && result.status == focaus_contracts::CommandResultStatus::Ok { window.app_handle().exit(0); }
     Ok(result)
 }
