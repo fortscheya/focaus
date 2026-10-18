@@ -427,6 +427,19 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .native-pane-empty strong { color: var(--app-foreground); font-size: 12px; font-weight: 600; }
 .native-pane-empty p { max-width: 360px; margin: 0; font-size: 10px; line-height: 1.6; }
 .native-pane-empty-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; margin-top: 4px; }
+.native-projection-actions { margin-bottom: 12px; padding: 9px 10px; border: 1px solid var(--app-border); border-radius: 9px; background: var(--app-surface-secondary); }
+.native-projection-action-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.native-action-label { margin-right: 4px; color: var(--app-muted); font-size: 10px; }
+.native-action-disabled { color: var(--app-muted); font-size: 9px; }
+.native-command-feedback { margin: 7px 0 0; color: var(--app-muted); font-size: 10px; line-height: 1.5; }
+.native-text-edit, .native-correction-editor { margin: 0 0 12px; padding: 11px; border: 1px solid color-mix(in oklch, var(--app-accent) 24%, var(--app-border)); border-radius: 9px; background: color-mix(in oklch, var(--app-accent-soft) 28%, var(--app-surface)); }
+.native-edit-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 7px; color: var(--app-muted); font-size: 10px; }
+.native-text-edit textarea, .native-correction-row textarea { width: 100%; min-height: 52px; padding: 8px; border: 1px solid var(--app-border); border-radius: 7px; background: var(--app-surface); color: var(--app-foreground); font-size: 11px; line-height: 1.55; resize: vertical; }
+.native-edit-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin-top: 7px; color: var(--app-muted); font-size: 9px; }
+.native-correction-row { display: grid; gap: 6px; padding: 9px 0; border-top: 1px solid var(--app-border); }
+.native-correction-row:first-of-type { border-top: 0; }
+.native-correction-original { display: block; color: var(--app-foreground); font-size: 11px; }
+.native-correction-row small { display: block; margin-top: 3px; color: var(--app-muted); font-size: 9px; }
 .native-empty-action { margin-top: 22px; }
 
 .boot-screen { display: grid; min-height: 100vh; place-items: center; align-content: center; gap: 12px; padding: 30px; background: var(--app-background); color: var(--app-muted); text-align: center; }
