@@ -21,8 +21,10 @@ use crate::{cancelled, invalid, invalid_argument, stale, task_error};
 use focaus_contracts::{
     AsrRawCandidate, AsrStreamOpen, AudioChunk, CatchupGenerateInput, CatchupResult, ErrorCode,
     InputSnapshot, ProgressState, ProgressStatePositionStatus, ProgressStateRecordingState, SafeError,
+    Task, TaskCheckpointInput,
 };
-use serde_json::Value;
+use serde_json::{json, Value};
+use std::collections::BTreeMap;
 
 pub const DEFAULT_PROGRESS_INTERVAL_MS: u64 = 10_000;
 pub const FOCAUS_DEADLINE_MS: u64 = crate::catchup::FOCAUS_DEADLINE_MS;
@@ -34,6 +36,7 @@ pub const HOST_WIRING_REQUIREMENTS: &[&str] = &[
     "N passes each durable mono audio chunk to AsrService::feed_chunk without blocking the writer.",
     "N decodes provider WebSocket events and calls AsrService::ingest_provider_event; A returns candidates only.",
     "N submits returned candidates through asr::submit_candidate and owns CAS, epoch, tombstone and DB writes.",
+    "N uses AsrService::checkpoint so task/attempt/snapshot/provider-task/mapping identities are persisted together.",
     "N calls AsrService::finish_task_request after the final audio chunk and marks provider completion separately.",
     "N provides the credential capability and EndpointPolicy; A never reads a secret or selects a fallback key.",
     "N schedules progress at the cadence boundary and supplies only latest transcript plus page text.",
@@ -85,6 +88,9 @@ pub struct AsrService {
 
 impl AsrService {
     pub fn new(config: AsrServiceConfig) -> Result<Self, SafeError> {
+        if config.attempt == 0 {
+            return Err(invalid_argument("asr_attempt_must_be_positive"));
+        }
         let session = StreamingSession::open(
             &config.open,
             config.provider_task_id,
@@ -116,6 +122,50 @@ impl AsrService {
         &self.binding
     }
 
+    pub fn checkpoint_input(
+        &self,
+        cursor: impl Into<String>,
+        mut safe_state: BTreeMap<String, Value>,
+    ) -> Result<TaskCheckpointInput, SafeError> {
+        if self.cancelled {
+            return Err(cancelled("asr_checkpoint_after_cancel"));
+        }
+        let cursor = cursor.into();
+        if cursor.trim().is_empty() {
+            return Err(invalid_argument("asr_checkpoint_cursor_required"));
+        }
+        let identity = [
+            ("task_id", json!(self.task_id())),
+            ("attempt", json!(self.session.attempt)),
+            ("snapshot_id", json!(self.session.snapshot_id)),
+            ("mapping_revision_id", json!(self.session.mapping_revision_id())),
+            ("provider_task_id", json!(self.session.provider_task_id)),
+        ];
+        for (key, expected) in identity {
+            if let Some(existing) = safe_state.get(key) {
+                if existing != &expected {
+                    return Err(stale("asr_checkpoint_identity_mismatch"));
+                }
+            }
+            safe_state.insert(key.into(), expected);
+        }
+        Ok(TaskCheckpointInput {
+            task_id: self.task_id().to_owned(),
+            attempt: self.session.attempt,
+            cursor,
+            safe_state,
+        })
+    }
+
+    pub async fn checkpoint<H: crate::HostServices>(
+        &self,
+        host: &H,
+        cursor: impl Into<String>,
+        safe_state: BTreeMap<String, Value>,
+    ) -> Result<Task, SafeError> {
+        host.task_checkpoint(self.checkpoint_input(cursor, safe_state)?).await
+    }
+
     /// Validate and hand one durable chunk to N's transport. A sequence gap
     /// is reported for the host to record; it does not block real-time audio.
     pub fn feed_chunk(&mut self, chunk: AudioChunk) -> Result<AudioFeedResult, SafeError> {
@@ -126,6 +176,9 @@ impl AsrService {
             return Err(stale("asr_feed_after_finish"));
         }
         crate::asr::validate_audio_chunk(&chunk)?;
+        if chunk.mapping.mapping_revision_id != self.session.mapping_revision_id() {
+            return Err(stale("asr_chunk_session_mapping_stale"));
+        }
         if chunk.chunk_seq < self.next_chunk_seq {
             return Err(task_error(ErrorCode::IdempotencyMismatch, "audio_chunk_sequence_replayed", false));
         }
@@ -435,6 +488,12 @@ mod tests {
         let mut service = AsrService::new(AsrServiceConfig { open: open(), provider_task_id: "fixture-stream-task".into(), connection_epoch: 1, attempt: 1 }).unwrap();
         let feed = service.feed_chunk(AudioChunk { chunk_seq: 0, audio_span: focaus_contracts::AudioSpan { audio_span_id: "00000000-0000-4000-8000-000000000009".into(), recording_id: "00000000-0000-4000-8000-000000000007".into(), asset_id: Some("00000000-0000-4000-8000-000000000002".into()), track_id: Some("track".into()), frame_range: Some(FrameRange { start_frame: 0, end_frame: 1600 }), timeline_range: TimelineRange { start_ms: 0, end_ms: 100 }, mapping_revision_id: Some("00000000-0000-4000-8000-000000000001".into()), coverage_status: AudioSpanCoverageStatus::Captured, asr_coverage: AudioSpanAsrCoverage::Pending }, encoded_bytes: vec![1, 2], mapping: mapping() }).unwrap();
         assert_eq!(feed.audio_span_id, "00000000-0000-4000-8000-000000000009");
+        let checkpoint = service.checkpoint_input("audio-0", std::collections::BTreeMap::new()).unwrap();
+        assert_eq!(checkpoint.task_id, "00000000-0000-4000-8000-000000000003");
+        assert_eq!(checkpoint.safe_state["mapping_revision_id"], "00000000-0000-4000-8000-000000000001");
+        let mut wrong_checkpoint_state = std::collections::BTreeMap::new();
+        wrong_checkpoint_state.insert("snapshot_id".into(), serde_json::json!("other-snapshot"));
+        assert_eq!(service.checkpoint_input("audio-1", wrong_checkpoint_state).unwrap_err().code, ErrorCode::StaleInput);
         let events = vec![
             fixtures::streaming_task_started(),
             fixtures::streaming_sentence_start(),
@@ -446,7 +505,42 @@ mod tests {
         assert!(matches!(&outcomes[2], AsrEventOutcome::Candidate(_)));
         service.finish_task_request().unwrap();
         assert!(matches!(&replay_stream_events(&mut service, &[fixtures::streaming_task_finished()]).unwrap()[0], AsrEventOutcome::TaskFinished));
+        service.cancel();
+        assert_eq!(service.checkpoint_input("after-cancel", std::collections::BTreeMap::new()).unwrap_err().code, ErrorCode::Cancelled);
         assert_eq!(build_stream_run_task(&open(), "fixture-stream-task").unwrap()["payload"]["model"], crate::models::STREAMING_ASR);
+    }
+
+    #[test]
+    fn asr_attempt_zero_is_rejected_before_replay_state_exists() {
+        let error = match AsrService::new(AsrServiceConfig { open: open(), provider_task_id: "fixture-stream-task".into(), connection_epoch: 1, attempt: 0 }) {
+            Ok(_) => panic!("attempt zero should be rejected"),
+            Err(error) => error,
+        };
+        assert_eq!(error.code, ErrorCode::InvalidArgument);
+    }
+
+    #[test]
+    fn durable_chunk_with_a_new_mapping_revision_is_stale() {
+        let mut service = AsrService::new(AsrServiceConfig { open: open(), provider_task_id: "fixture-stream-task".into(), connection_epoch: 1, attempt: 1 }).unwrap();
+        let mut stale_mapping = mapping();
+        stale_mapping.mapping_revision_id = "00000000-0000-4000-8000-000000000099".into();
+        let chunk = AudioChunk {
+            chunk_seq: 0,
+            audio_span: focaus_contracts::AudioSpan {
+                audio_span_id: "00000000-0000-4000-8000-000000000010".into(),
+                recording_id: "00000000-0000-4000-8000-000000000007".into(),
+                asset_id: Some("00000000-0000-4000-8000-000000000002".into()),
+                track_id: Some("track".into()),
+                frame_range: Some(FrameRange { start_frame: 0, end_frame: 1600 }),
+                timeline_range: TimelineRange { start_ms: 0, end_ms: 100 },
+                mapping_revision_id: Some(stale_mapping.mapping_revision_id.clone()),
+                coverage_status: AudioSpanCoverageStatus::Captured,
+                asr_coverage: AudioSpanAsrCoverage::Pending,
+            },
+            encoded_bytes: vec![1, 2],
+            mapping: stale_mapping,
+        };
+        assert_eq!(service.feed_chunk(chunk).unwrap_err().code, ErrorCode::StaleInput);
     }
 
     #[test]

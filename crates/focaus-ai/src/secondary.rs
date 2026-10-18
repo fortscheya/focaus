@@ -20,6 +20,7 @@ use serde_json::{json, Value};
 use std::collections::BTreeSet;
 
 pub const SECONDARY_RESULT_SEMANTICS: &str = "secondary_segment_v1";
+pub const LANGUAGE_VARIANTS_RESULT_SEMANTICS: &str = "language_variants_v1";
 
 const FILLERS: &[&str] = &["嗯", "呃", "啊", "这个", "那个", "you know", "um", "uh"];
 const THIRD_PERSON_MARKERS: &[&str] = &["老师说", "老师认为", "他说", "她说", "他说道", "the teacher says", "he says", "she says"];
@@ -757,6 +758,10 @@ pub fn decode_secondary_result_candidate(value: &Value) -> Result<SecondaryResul
         || envelope.attempt == 0
         || envelope.target_revision.is_empty()
         || envelope.source_refs.is_empty()
+        || envelope.candidate.secondary_id.is_empty()
+        || envelope.candidate.recording_id.is_empty()
+        || envelope.candidate.generation_revision.is_empty()
+        || envelope.candidate.text.trim().is_empty()
         || envelope.candidate.revision_id != envelope.target_revision
         || envelope.candidate.raw_refs != envelope.source_refs
     {
@@ -839,6 +844,49 @@ pub fn validate_five_tier_variants(
         }
     }
     Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LanguageVariantsResultEnvelope {
+    pub result_semantics: String,
+    pub submission_key: String,
+    pub note_id: EntityId,
+    pub fact_set_revision: EntityId,
+    pub variants: Vec<LanguageVariant>,
+}
+
+pub fn build_language_variants_candidate(
+    note_id: impl Into<String>,
+    fact_set_revision: impl Into<String>,
+    fact_ids: &[EntityId],
+    variants: &[LanguageVariant],
+) -> Result<Value, SafeError> {
+    let note_id = note_id.into();
+    let fact_set_revision = fact_set_revision.into();
+    validate_five_tier_variants(&note_id, &fact_set_revision, fact_ids, variants)?;
+    let envelope = LanguageVariantsResultEnvelope {
+        result_semantics: LANGUAGE_VARIANTS_RESULT_SEMANTICS.into(),
+        submission_key: format!("language_variants:{}:{}", note_id, fact_set_revision),
+        note_id,
+        fact_set_revision,
+        variants: variants.to_vec(),
+    };
+    serde_json::to_value(envelope).map_err(|_| invalid("language_variants_serialization_failed"))
+}
+
+pub fn decode_language_variants_candidate(
+    value: &Value,
+    fact_ids: &[EntityId],
+) -> Result<LanguageVariantsResultEnvelope, SafeError> {
+    let envelope: LanguageVariantsResultEnvelope = serde_json::from_value(value.clone())
+        .map_err(|_| invalid("language_variants_candidate_invalid"))?;
+    if envelope.result_semantics != LANGUAGE_VARIANTS_RESULT_SEMANTICS
+        || envelope.submission_key != format!("language_variants:{}:{}", envelope.note_id, envelope.fact_set_revision)
+    {
+        return Err(invalid("unknown_language_variants_result_semantics"));
+    }
+    validate_five_tier_variants(&envelope.note_id, &envelope.fact_set_revision, fact_ids, &envelope.variants)?;
+    Ok(envelope)
 }
 
 /// The host supplies exact selectors and user patches.  AI treats an exact or
@@ -1218,6 +1266,12 @@ mod tests {
     fn five_tiers_share_exact_fact_set() {
         let variants = (1..=5).map(|tier| make_language_variant(format!("v{tier}"), "note", tier, "facts", vec!["f1".into(), "f2".into()], format!("p{tier}")).unwrap()).collect::<Vec<_>>();
         validate_five_tier_variants("note", "facts", &["f1".into(), "f2".into()], &variants).unwrap();
+        let candidate = build_language_variants_candidate("note", "facts", &["f1".into(), "f2".into()], &variants).unwrap();
+        assert_eq!(candidate["result_semantics"], LANGUAGE_VARIANTS_RESULT_SEMANTICS);
+        assert_eq!(decode_language_variants_candidate(&candidate, &["f1".into(), "f2".into()]).unwrap().variants.len(), 5);
+        let mut wrong_semantics = candidate.clone();
+        wrong_semantics["result_semantics"] = json!("focaus_context_v2");
+        assert_eq!(decode_language_variants_candidate(&wrong_semantics, &["f1".into(), "f2".into()]).unwrap_err().code, focaus_contracts::ErrorCode::InvalidResult);
         let mut bad = variants;
         bad[4].fact_ids.push("extra".into());
         assert!(validate_five_tier_variants("note", "facts", &["f1".into(), "f2".into()], &bad).is_err());

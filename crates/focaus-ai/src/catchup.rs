@@ -5,7 +5,7 @@
 //! the body cutoff and the live progress pointer as separate values so a later
 //! progress update cannot rewrite an already generated body.
 
-use crate::{invalid, invalid_argument, stale, task_error, models, PROMPT_FOCAUS_V2};
+use crate::{binding_matches, invalid, invalid_argument, stale, task_error, models, PROMPT_FOCAUS_V2};
 use focaus_contracts::{
     BodyBlock, CatchupCoverage, CatchupGenerateInput, CatchupResult,
     CatchupResultCompletionStatus, CatchupResultPrerequisitesReasonValue, CatchupWindow,
@@ -298,6 +298,39 @@ pub fn validate_publication(result: &CatchupResult, elapsed_ms: u64) -> Result<(
     Ok(())
 }
 
+pub fn decode_focaus_result_candidate(value: &Value) -> Result<CatchupResult, SafeError> {
+    let result: CatchupResult = serde_json::from_value(value.clone())
+        .map_err(|_| invalid("focaus_result_candidate_invalid"))?;
+    if result.result_semantics != FOCAUS_RESULT_SEMANTICS {
+        return Err(invalid("unknown_focaus_result_semantics"));
+    }
+    if result.result_id.is_empty() || result.snapshot_id.is_empty() || result.body_revision_id.is_empty() {
+        return Err(stale("focaus_result_candidate_identity_missing"));
+    }
+    Ok(result)
+}
+
+pub fn validate_focaus_result_submission(
+    submission: &ResultSubmitInput,
+) -> Result<CatchupResult, SafeError> {
+    if submission.task_id.is_empty() || submission.snapshot_id.is_empty() || submission.attempt == 0 {
+        return Err(invalid_argument("focaus_result_submission_identity_required"));
+    }
+    let result = decode_focaus_result_candidate(&submission.candidate)?;
+    let expected_sources: Vec<SourceRef> = result
+        .path_nodes
+        .iter()
+        .flat_map(|node| node.source_refs.iter().cloned())
+        .collect();
+    if result.snapshot_id != submission.snapshot_id
+        || submission.source_refs != expected_sources
+        || result.body_revision_id.is_empty()
+    {
+        return Err(stale("focaus_result_submission_identity_mismatch"));
+    }
+    Ok(result)
+}
+
 /// The host owns snapshot creation and result submission.  This helper is
 /// intentionally transport agnostic: a future model client can produce the
 /// `FocausDraft`, while all source and CAS checks remain in the host path.
@@ -308,7 +341,7 @@ pub async fn submit_result<H: HostServices>(
     result: &CatchupResult,
 ) -> Result<focaus_contracts::CommandResult, SafeError> {
     let candidate = serde_json::to_value(result).map_err(|_| invalid("focaus_result_serialization_failed"))?;
-    host.result_submit(ResultSubmitInput {
+    let submission = ResultSubmitInput {
         task_id: task_id.into(),
         attempt,
         snapshot_id: result.snapshot_id.clone(),
@@ -319,13 +352,23 @@ pub async fn submit_result<H: HostServices>(
             .flat_map(|node| node.source_refs.iter().cloned())
             .collect(),
         resources: vec![],
-    })
-    .await
+    };
+    validate_focaus_result_submission(&submission)?;
+    host.result_submit(submission).await
 }
 
 /// Build a bounded qwen3.8-flash request.  It contains only the already
 /// frozen snapshot and retrieved context; it has no path or credential field.
 pub fn build_generation_request(input: &CatchupGenerateInput) -> Result<Value, SafeError> {
+    let binding = crate::binding_for_model(ModelId::Qwen38Flash);
+    build_generation_request_with_binding(input, &binding)
+}
+
+pub fn build_generation_request_with_binding(
+    input: &CatchupGenerateInput,
+    binding: &focaus_contracts::CredentialBinding,
+) -> Result<Value, SafeError> {
+    binding_matches(binding, ModelId::Qwen38Flash)?;
     if input.snapshot.model_id != Some(ModelId::Qwen38Flash)
         || input.snapshot.region.as_deref() != Some(models::REGION)
     {
@@ -408,6 +451,18 @@ mod tests {
         validate_publication(&result, 90).unwrap();
         let wire = serde_json::to_value(&result).unwrap();
         focaus_contracts::validate("CatchupResult", &wire).unwrap();
+        let source_refs = result.path_nodes.iter().flat_map(|node| node.source_refs.iter().cloned()).collect::<Vec<_>>();
+        let submission = ResultSubmitInput { task_id: "catchup-task".into(), attempt: 1, snapshot_id: result.snapshot_id.clone(), candidate: wire.clone(), source_refs, resources: vec![] };
+        assert_eq!(validate_focaus_result_submission(&submission).unwrap(), result);
+        let mut wrong_semantics = wire.clone();
+        wrong_semantics["result_semantics"] = serde_json::json!("secondary_segment_v1");
+        assert_eq!(decode_focaus_result_candidate(&wrong_semantics).unwrap_err().code, ErrorCode::InvalidResult);
+        let mut wrong_outer = submission.clone();
+        wrong_outer.snapshot_id = "other-snapshot".into();
+        assert_eq!(validate_focaus_result_submission(&wrong_outer).unwrap_err().code, ErrorCode::StaleInput);
+        let mut zero_attempt = submission;
+        zero_attempt.attempt = 0;
+        assert_eq!(validate_focaus_result_submission(&zero_attempt).unwrap_err().code, ErrorCode::InvalidArgument);
     }
 
     #[test]
@@ -427,6 +482,8 @@ mod tests {
         assert_eq!(body["model"], models::MULTIMODAL);
         assert!(body["messages"][1]["content"][0]["text"].as_str().unwrap().contains(FOCAUS_RESULT_SEMANTICS));
         assert!(body.to_string().find("credential").is_none());
+        let wrong_binding = crate::binding_for_model(ModelId::DecisionModelPreview);
+        assert_eq!(build_generation_request_with_binding(&input(), &wrong_binding).unwrap_err().code, ErrorCode::InvalidArgument);
     }
 
     #[test]

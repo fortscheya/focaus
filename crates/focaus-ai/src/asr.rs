@@ -403,6 +403,10 @@ impl StreamingSession {
     pub fn candidates(&self) -> impl Iterator<Item = &AsrRawCandidate> {
         self.sentences.values().map(|record| &record.candidate)
     }
+
+    pub fn mapping_revision_id(&self) -> &str {
+        &self.mapping_revision_id
+    }
 }
 
 /// Filetrans is intentionally a separate binding and task namespace.  It can
@@ -1021,6 +1025,33 @@ mod tests {
         let mut old_contract = open();
         old_contract.snapshot.contract_version = "1.0.0".into();
         assert_eq!(validate_stream_open(&old_contract).unwrap_err().code, ErrorCode::UnsupportedVersion);
+    }
+
+    #[test]
+    fn filetrans_uses_only_its_own_model_and_slot() {
+        let request = FileTransRequest {
+            local_task_id: "file-task".into(),
+            attempt: 1,
+            snapshot: snapshot(ModelId::QwenAudio31AsrFlashFiletrans, TaskKind::AsrFile),
+            binding: crate::binding_for_model(ModelId::QwenAudio31AsrFlashFiletrans),
+            local_request_segment_id: "segment".into(),
+            audio_span: AudioSpan {
+                audio_span_id: "span".into(),
+                recording_id: "rec".into(),
+                asset_id: Some("asset".into()),
+                track_id: Some("track".into()),
+                frame_range: Some(FrameRange { start_frame: 0, end_frame: 10 }),
+                timeline_range: TimelineRange { start_ms: 0, end_ms: 100 },
+                mapping_revision_id: None,
+                coverage_status: AudioSpanCoverageStatus::Captured,
+                asr_coverage: AudioSpanAsrCoverage::Pending,
+            },
+            file_url: "https://host.invalid/fixture.wav".into(),
+        };
+        assert_eq!(build_filetrans_submit(&request).unwrap()["model"], FILETRANS_MODEL_ID);
+        let mut wrong_slot = request.clone();
+        wrong_slot.binding = crate::binding_for_model(ModelId::QwenAudio31AsrFlashStreaming);
+        assert_eq!(validate_filetrans_request(&wrong_slot).unwrap_err().code, ErrorCode::InvalidArgument);
     }
 
     #[test]
