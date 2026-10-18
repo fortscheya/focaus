@@ -5,10 +5,11 @@
 //! third-person summary.  Critical semantic corrections remain suggestions
 //! for user review.
 
-use crate::{invalid, invalid_argument, models, stale, PROMPT_SECONDARY_V1};
+use crate::{invalid, invalid_argument, models, stale, task_error, PROMPT_SECONDARY_V1};
 use focaus_contracts::{
-    Command, CommandActor, CommandName, CommandResult, CorrectionAcceptInput,
-    CorrectionRejectInput, CorrectionSuggestion, CorrectionSuggestionSemanticRisk,
+    Command, CommandActor, CommandName, CommandResult, CommandResultStatus,
+    CorrectionAcceptInput, CorrectionDraftInput, CorrectionRejectInput,
+    CorrectionSuggestion, CorrectionSuggestionSemanticRisk,
     CorrectionSuggestionState, Definition, EntityId, HostServices, InputSnapshot,
     LanguageVariant, LanguageVariantSyncStatus, ModelId, ResultSubmitInput, Selector,
     SafeError, SecondarySegment, SourceRef, SymbolBinding, TaskKind, UserPatch,
@@ -51,6 +52,12 @@ pub struct TrimmedText {
 pub enum CorrectionAction {
     Accept,
     Reject,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CorrectionReceipt {
+    Committed { revision_id: EntityId },
+    Accepted { task_id: EntityId },
 }
 
 fn source_units_for_secondary<'a>(
@@ -110,10 +117,18 @@ fn validate_raw_units_for_request(raw_units: &[RawTextUnit]) -> Result<(), SafeE
 }
 
 pub fn validate_secondary_snapshot(snapshot: &InputSnapshot) -> Result<(), SafeError> {
+    if snapshot.contract_version != focaus_contracts::CONTRACT_VERSION {
+        return Err(task_error(
+            focaus_contracts::ErrorCode::UnsupportedVersion,
+            "secondary_contract_version_unsupported",
+            false,
+        ));
+    }
     if snapshot.purpose != TaskKind::Secondary
         || snapshot.model_id != Some(ModelId::Qwen38Flash)
         || snapshot.region.as_deref() != Some(models::REGION)
         || snapshot.prompt_version.as_deref() != Some(PROMPT_SECONDARY_V1)
+        || snapshot.language_tier.is_some_and(|tier| !(1..=5).contains(&tier))
     {
         return Err(invalid_argument("secondary_snapshot_binding_mismatch"));
     }
@@ -361,6 +376,34 @@ fn validate_correction_action(
     Ok(())
 }
 
+fn validate_correction_edit_scope(
+    suggestion: &CorrectionSuggestion,
+    segment: &SecondarySegment,
+    user_patches: &[UserPatch],
+    composition_active: bool,
+) -> Result<(), SafeError> {
+    if composition_active {
+        return Err(task_error(
+            focaus_contracts::ErrorCode::EditProtected,
+            "correction_composition_active",
+            false,
+        ));
+    }
+    let selector = Selector::V1(focaus_contracts::TextSelector {
+        kind: "text".into(),
+        block_id: segment.secondary_id.clone(),
+        anchor: suggestion.anchor.clone(),
+    });
+    if proposal_intersects_user_patch(&segment.secondary_id, &selector, user_patches) {
+        return Err(task_error(
+            focaus_contracts::ErrorCode::EditProtected,
+            "correction_intersects_user_patch",
+            false,
+        ));
+    }
+    Ok(())
+}
+
 /// Build the exact user command consumed by NativeHost's ContentStore path.
 /// The command carries the current Secondary revision as both its base and
 /// expected revision; a stale UI cannot migrate the anchor to a newer body.
@@ -389,6 +432,26 @@ pub fn build_correction_command(
         &final_text,
         critical_confirmed,
     )?;
+    build_correction_command_after_validation(
+        command_id,
+        idempotency_key,
+        window_id,
+        suggestion,
+        segment,
+        action,
+        final_text,
+    )
+}
+
+fn build_correction_command_after_validation(
+    command_id: String,
+    idempotency_key: String,
+    window_id: Option<EntityId>,
+    suggestion: &CorrectionSuggestion,
+    segment: &SecondarySegment,
+    action: CorrectionAction,
+    final_text: String,
+) -> Result<Command, SafeError> {
     let mut expected_revisions = std::collections::BTreeMap::new();
     expected_revisions.insert(segment.secondary_id.clone(), segment.revision_id.clone());
     let (name, payload) = match action {
@@ -397,7 +460,7 @@ pub fn build_correction_command(
             serde_json::to_value(CorrectionAcceptInput {
                 suggestion_id: suggestion.suggestion_id.clone(),
                 base_revision: segment.revision_id.clone(),
-                final_text,
+                final_text: final_text.clone(),
             })
             .map_err(|_| invalid("correction_command_serialization_failed"))?,
         ),
@@ -421,6 +484,129 @@ pub fn build_correction_command(
         idempotency_key: Some(idempotency_key),
         expected_revisions: Some(expected_revisions),
     })
+}
+
+/// Guarded accept/reject path for the formal host call.  A user patch or an
+/// active IME composition blocks the command before it reaches ContentStore.
+pub fn build_correction_command_with_guards(
+    command_id: impl Into<String>,
+    idempotency_key: impl Into<String>,
+    window_id: Option<EntityId>,
+    suggestion: &CorrectionSuggestion,
+    segment: &SecondarySegment,
+    raw_units: &[RawTextUnit],
+    user_patches: &[UserPatch],
+    composition_active: bool,
+    action: CorrectionAction,
+    final_text: impl Into<String>,
+    critical_confirmed: bool,
+) -> Result<Command, SafeError> {
+    validate_correction_edit_scope(suggestion, segment, user_patches, composition_active)?;
+    build_correction_command(
+        command_id,
+        idempotency_key,
+        window_id,
+        suggestion,
+        segment,
+        raw_units,
+        action,
+        final_text,
+        critical_confirmed,
+    )
+}
+
+pub fn build_correction_draft_command(
+    command_id: impl Into<String>,
+    idempotency_key: impl Into<String>,
+    window_id: Option<EntityId>,
+    suggestion: &CorrectionSuggestion,
+    segment: &SecondarySegment,
+    raw_units: &[RawTextUnit],
+    draft: impl Into<String>,
+    composition_active: bool,
+) -> Result<Command, SafeError> {
+    let command_id = command_id.into();
+    let idempotency_key = idempotency_key.into();
+    let draft = draft.into();
+    if command_id.trim().is_empty() || idempotency_key.trim().is_empty() {
+        return Err(invalid_argument("correction_command_identity_required"));
+    }
+    validate_correction_candidate(suggestion, segment, raw_units)?;
+    if !segment
+        .suggestions
+        .iter()
+        .any(|candidate| candidate == suggestion)
+    {
+        return Err(stale("correction_candidate_not_current"));
+    }
+    if draft.trim().is_empty() {
+        return Err(invalid_argument("correction_draft_required"));
+    }
+    let mut expected_revisions = std::collections::BTreeMap::new();
+    expected_revisions.insert(segment.secondary_id.clone(), segment.revision_id.clone());
+    let payload = serde_json::to_value(CorrectionDraftInput {
+        suggestion_id: suggestion.suggestion_id.clone(),
+        draft,
+        composition_active,
+    })
+    .map_err(|_| invalid("correction_command_serialization_failed"))?;
+    Ok(Command {
+        contract_version: CONTRACT_VERSION.to_string(),
+        command_id,
+        name: CommandName::CorrectionDraft,
+        actor: CommandActor::User,
+        window_id,
+        payload,
+        idempotency_key: Some(idempotency_key),
+        expected_revisions: Some(expected_revisions),
+    })
+}
+
+pub fn validate_correction_receipt(
+    receipt: &CommandResult,
+    command: &Command,
+    segment: &SecondarySegment,
+) -> Result<CorrectionReceipt, SafeError> {
+    if receipt.contract_version != CONTRACT_VERSION {
+        return Err(task_error(
+            focaus_contracts::ErrorCode::UnsupportedVersion,
+            "correction_receipt_contract_version_unsupported",
+            false,
+        ));
+    }
+    if receipt.command_id != command.command_id {
+        return Err(stale("correction_receipt_command_mismatch"));
+    }
+    match &receipt.status {
+        CommandResultStatus::Error => Err(receipt
+            .error
+            .clone()
+            .unwrap_or_else(|| invalid("correction_command_failed_without_error"))),
+        CommandResultStatus::Accepted => {
+            let task_id = receipt
+                .task_id
+                .clone()
+                .filter(|task_id| !task_id.is_empty())
+                .ok_or_else(|| invalid("correction_accepted_task_missing"))?;
+            if receipt.current_state.is_none() {
+                return Err(invalid("correction_accepted_state_missing"));
+            }
+            Ok(CorrectionReceipt::Accepted { task_id })
+        }
+        CommandResultStatus::Ok => {
+            let revision_id = receipt
+                .committed_revisions
+                .as_ref()
+                .and_then(|revisions| revisions.get(&segment.secondary_id))
+                .cloned()
+                .filter(|revision| !revision.is_empty())
+                .ok_or_else(|| invalid("correction_committed_revision_missing"))?;
+            if revision_id == segment.revision_id {
+                return Err(stale("correction_receipt_revision_unchanged"));
+            }
+            Ok(CorrectionReceipt::Committed { revision_id })
+        }
+    }
 }
 
 /// Invoke the same host command route used by the UI for an explicit accept or
@@ -450,6 +636,38 @@ pub async fn apply_correction<H: HostServices>(
         critical_confirmed,
     )?;
     host.invoke(command).await
+}
+
+pub async fn apply_correction_with_guards<H: HostServices>(
+    host: &H,
+    command_id: impl Into<String>,
+    idempotency_key: impl Into<String>,
+    window_id: Option<EntityId>,
+    suggestion: &CorrectionSuggestion,
+    segment: &SecondarySegment,
+    raw_units: &[RawTextUnit],
+    user_patches: &[UserPatch],
+    composition_active: bool,
+    action: CorrectionAction,
+    final_text: impl Into<String>,
+    critical_confirmed: bool,
+) -> Result<(Command, CommandResult), SafeError> {
+    let command = build_correction_command_with_guards(
+        command_id,
+        idempotency_key,
+        window_id,
+        suggestion,
+        segment,
+        raw_units,
+        user_patches,
+        composition_active,
+        action,
+        final_text,
+        critical_confirmed,
+    )?;
+    let receipt = host.invoke(command.clone()).await?;
+    validate_correction_receipt(&receipt, &command, segment)?;
+    Ok((command, receipt))
 }
 
 /// Submit a Secondary result through the formal task/result boundary.  The
@@ -529,9 +747,17 @@ pub fn validate_five_tier_variants(
         return Err(invalid("language_variants_must_have_five_tiers"));
     }
     let expected: BTreeSet<String> = fact_ids.iter().cloned().collect();
+    if expected.len() != fact_ids.len() {
+        return Err(invalid("language_variant_fact_set_contains_duplicates"));
+    }
     let mut tiers = BTreeSet::new();
     for variant in variants {
-        if variant.note_id != note_id || variant.fact_set_revision != fact_set_revision || variant.fact_ids.iter().cloned().collect::<BTreeSet<_>>() != expected || !(1..=5).contains(&variant.tier) {
+        if variant.note_id != note_id
+            || variant.fact_set_revision != fact_set_revision
+            || variant.fact_ids.len() != expected.len()
+            || variant.fact_ids.iter().cloned().collect::<BTreeSet<_>>() != expected
+            || !(1..=5).contains(&variant.tier)
+        {
             return Err(invalid("language_variant_fact_set_mismatch"));
         }
         if !tiers.insert(variant.tier) {
@@ -783,6 +1009,12 @@ mod tests {
             build_secondary_request_with_binding(&secondary_snapshot(ModelId::Qwen38Flash), &wrong_binding, &[unit("it works")]).unwrap_err().code,
             focaus_contracts::ErrorCode::InvalidArgument,
         );
+        let mut old_contract = secondary_snapshot(ModelId::Qwen38Flash);
+        old_contract.contract_version = "1.0.0".into();
+        assert_eq!(validate_secondary_snapshot(&old_contract).unwrap_err().code, focaus_contracts::ErrorCode::UnsupportedVersion);
+        let mut unknown_tier = secondary_snapshot(ModelId::Qwen38Flash);
+        unknown_tier.language_tier = Some(6);
+        assert_eq!(validate_secondary_snapshot(&unknown_tier).unwrap_err().code, focaus_contracts::ErrorCode::InvalidArgument);
     }
 
     #[test]
@@ -835,6 +1067,37 @@ mod tests {
         assert_eq!(rejected.name, CommandName::CorrectionReject);
         assert_eq!(rejected.payload["final_text"], "the value is 2");
         assert_eq!(build_correction_command("cmd-4", "idem-4", None, &suggestion, &segment, &[raw], CorrectionAction::Reject, "the value is 3", false).unwrap_err().code, focaus_contracts::ErrorCode::InvalidArgument);
+
+        let draft = build_correction_draft_command("cmd-5", "idem-5", None, &suggestion, &segment, &[unit("the value is 2")], "the value is 3", true).unwrap();
+        assert_eq!(draft.name, CommandName::CorrectionDraft);
+        assert!(draft.payload["composition_active"].as_bool().unwrap());
+
+        let receipt = CommandResult {
+            contract_version: focaus_contracts::CONTRACT_VERSION.into(),
+            command_id: accepted.command_id.clone(),
+            status: CommandResultStatus::Ok,
+            result: Some(json!({"state":"accepted"})),
+            committed_revisions: Some(std::collections::BTreeMap::from([(String::from("sec"), String::from("secondary-rev-2"))])),
+            event_seq: Some(1),
+            task_id: None,
+            current_state: None,
+            error: None,
+        };
+        assert_eq!(validate_correction_receipt(&receipt, &accepted, &segment).unwrap(), CorrectionReceipt::Committed { revision_id: "secondary-rev-2".into() });
+        let accepted_receipt = CommandResult {
+            contract_version: focaus_contracts::CONTRACT_VERSION.into(), command_id: accepted.command_id.clone(), status: CommandResultStatus::Accepted,
+            result: None, committed_revisions: None, event_seq: None, task_id: Some("task-1".into()), current_state: Some(focaus_contracts::TaskState::Running), error: None,
+        };
+        assert_eq!(validate_correction_receipt(&accepted_receipt, &accepted, &segment).unwrap(), CorrectionReceipt::Accepted { task_id: "task-1".into() });
+
+        let patch = UserPatch {
+            patch_id: "patch".into(), target_id: "sec".into(), base_revision: "secondary-rev-1".into(),
+            operation: focaus_contracts::UserPatchOperation::TextReplace,
+            selector: Selector::V1(focaus_contracts::TextSelector { kind: "text".into(), block_id: "sec".into(), anchor: suggestion.anchor.clone() }),
+            before_hash: "hash".into(), after_value: json!("user"), author: "user".into(), intent: "edit".into(), undo_group_id: "undo".into(), created_at: "now".into(),
+        };
+        assert_eq!(build_correction_command_with_guards("cmd-6", "idem-6", None, &suggestion, &segment, &[unit("the value is 2")], &[patch], false, CorrectionAction::Accept, "the value is 3", true).unwrap_err().code, focaus_contracts::ErrorCode::EditProtected);
+        assert_eq!(build_correction_command_with_guards("cmd-7", "idem-7", None, &suggestion, &segment, &[unit("the value is 2")], &[], true, CorrectionAction::Accept, "the value is 3", true).unwrap_err().code, focaus_contracts::ErrorCode::EditProtected);
     }
 
     #[test]
@@ -860,6 +1123,8 @@ mod tests {
         let mut bad = variants;
         bad[4].fact_ids.push("extra".into());
         assert!(validate_five_tier_variants("note", "facts", &["f1".into(), "f2".into()], &bad).is_err());
+        let duplicate_variants = (1..=5).map(|tier| make_language_variant(format!("d{tier}"), "note", tier, "facts", vec!["f1".into(), "f1".into()], format!("p{tier}")).unwrap()).collect::<Vec<_>>();
+        assert!(validate_five_tier_variants("note", "facts", &["f1".into(), "f1".into()], &duplicate_variants).is_err());
     }
 
     #[test]

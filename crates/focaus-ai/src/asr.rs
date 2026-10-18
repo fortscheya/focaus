@@ -46,8 +46,16 @@ struct SentenceRecord {
 
 /// Validates the exact model/credential pair before any network request.
 pub fn validate_stream_open(open: &AsrStreamOpen) -> Result<(), SafeError> {
+    if open.snapshot.contract_version != focaus_contracts::CONTRACT_VERSION {
+        return Err(task_error(
+            ErrorCode::UnsupportedVersion,
+            "stream_contract_version_unsupported",
+            false,
+        ));
+    }
     if open.snapshot.model_id != Some(ModelId::QwenAudio31AsrFlashStreaming)
         || open.snapshot.region.as_deref() != Some(models::REGION)
+        || open.snapshot.prompt_version.as_deref() != Some(crate::PROMPT_ASR_STREAM_V1)
     {
         return Err(invalid_argument("stream_snapshot_model_or_region_mismatch"));
     }
@@ -226,6 +234,9 @@ pub struct StreamingSession {
     pub connection_epoch: u64,
     pub mapping_revision_id: String,
     cancelled: bool,
+    provider_started: bool,
+    finish_requested: bool,
+    provider_finished: bool,
     terminal: bool,
     sentences: BTreeMap<String, SentenceRecord>,
 }
@@ -246,9 +257,61 @@ impl StreamingSession {
             connection_epoch,
             mapping_revision_id: open.mapping.mapping_revision_id.clone(),
             cancelled: false,
+            provider_started: false,
+            finish_requested: false,
+            provider_finished: false,
             terminal: false,
             sentences: BTreeMap::new(),
         })
+    }
+
+    pub fn provider_task_started(&mut self, provider_task_id: &str) -> Result<(), SafeError> {
+        if provider_task_id != self.provider_task_id {
+            return Err(stale("stream_connection_binding_mismatch"));
+        }
+        if self.cancelled || self.provider_finished || self.terminal {
+            return Err(stale("stream_task_started_after_terminal"));
+        }
+        if self.provider_started {
+            return Err(task_error(ErrorCode::Conflict, "duplicate_stream_task_started", false));
+        }
+        self.provider_started = true;
+        Ok(())
+    }
+
+    pub fn request_finish(&mut self) -> Result<(), SafeError> {
+        if self.cancelled {
+            return Err(cancelled("stream_finish_after_cancel"));
+        }
+        if !self.provider_started {
+            return Err(invalid_argument("stream_finish_before_task_started"));
+        }
+        if self.provider_finished || self.terminal {
+            return Err(stale("stream_finish_after_provider_finished"));
+        }
+        if self.finish_requested {
+            return Err(task_error(ErrorCode::IdempotencyMismatch, "duplicate_stream_finish", false));
+        }
+        self.finish_requested = true;
+        Ok(())
+    }
+
+    pub fn provider_task_finished(&mut self, provider_task_id: &str) -> Result<(), SafeError> {
+        if provider_task_id != self.provider_task_id {
+            return Err(stale("stream_connection_binding_mismatch"));
+        }
+        if self.cancelled {
+            return Err(cancelled("stream_finished_after_cancel"));
+        }
+        if !self.provider_started || !self.finish_requested {
+            return Err(invalid("provider_task_finished_before_finish_request"));
+        }
+        if self.provider_finished {
+            return Err(task_error(ErrorCode::Conflict, "duplicate_stream_task_finished", false));
+        }
+        self.provider_finished = true;
+        self.terminal = true;
+        Ok(())
     }
 
     pub fn cancel(&mut self) {
@@ -256,7 +319,8 @@ impl StreamingSession {
     }
 
     pub fn finish(&mut self) {
-        if !self.cancelled {
+        if !self.cancelled && self.finish_requested {
+            self.provider_finished = true;
             self.terminal = true;
         }
     }
@@ -267,6 +331,9 @@ impl StreamingSession {
         }
         if self.terminal {
             return Err(stale("stream_result_after_finish"));
+        }
+        if !self.provider_started {
+            return Err(invalid("stream_result_before_task_started"));
         }
         if sentence.provider_task_id != self.provider_task_id
             || sentence.connection_epoch != self.connection_epoch
@@ -448,6 +515,33 @@ pub fn build_stream_run_task(open: &AsrStreamOpen, provider_task_id: &str) -> Re
     }))
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct StreamingRequestEnvelope {
+    pub local_task_id: String,
+    pub attempt: u64,
+    pub snapshot_id: String,
+    pub provider_task_id: String,
+    pub binding: CredentialBinding,
+    pub provider_message: Value,
+}
+
+/// Typed host-facing envelope for the provider request plus the local task
+/// identity that must accompany it in TaskManager checkpoints.
+pub fn build_stream_request_envelope(
+    open: &AsrStreamOpen,
+    provider_task_id: &str,
+    attempt: u64,
+) -> Result<StreamingRequestEnvelope, SafeError> {
+    Ok(StreamingRequestEnvelope {
+        local_task_id: open.task_id.clone(),
+        attempt,
+        snapshot_id: open.snapshot.snapshot_id.clone(),
+        provider_task_id: provider_task_id.to_owned(),
+        binding: open.binding.clone(),
+        provider_message: build_stream_run_task(open, provider_task_id)?,
+    })
+}
+
 pub fn build_stream_finish_task(provider_task_id: &str) -> Result<Value, SafeError> {
     crate::transport::validate_remote_task_id(provider_task_id)?;
     Ok(json!({
@@ -476,7 +570,7 @@ pub fn plan_retry(
     binding: &CredentialBinding,
 ) -> Result<RetryPlan, SafeError> {
     binding_matches(binding, binding.model_id.clone())?;
-    if !error.retryable {
+    if !error.retryable || matches!(error.code, ErrorCode::AuthRequired | ErrorCode::InvalidArgument | ErrorCode::UnsupportedVersion) {
         return Ok(RetryPlan::Fail);
     }
     if matches!(error.code, ErrorCode::NetworkUnavailable | ErrorCode::RateLimited | ErrorCode::ProviderError) {
@@ -505,14 +599,24 @@ pub async fn submit_candidate<H: HostServices>(
     candidate: &AsrRawCandidate,
     source_refs: Vec<SourceRef>,
 ) -> Result<focaus_contracts::CommandResult, SafeError> {
-    host.result_submit(ResultSubmitInput {
+    host.result_submit(build_asr_result_submission(candidate, source_refs)?).await
+}
+
+pub fn build_asr_result_submission(
+    candidate: &AsrRawCandidate,
+    source_refs: Vec<SourceRef>,
+) -> Result<ResultSubmitInput, SafeError> {
+    if candidate.task_id.is_empty() || candidate.snapshot_id.is_empty() {
+        return Err(invalid_argument("asr_result_identity_required"));
+    }
+    Ok(ResultSubmitInput {
         task_id: candidate.task_id.clone(),
         attempt: candidate.attempt,
         snapshot_id: candidate.snapshot_id.clone(),
         candidate: serde_json::to_value(candidate).map_err(|_| invalid("asr_candidate_serialization_failed"))?,
         source_refs,
         resources: vec![],
-    }).await
+    })
 }
 
 /// Exact provider-shaped stream events are decoded before entering the local
@@ -520,23 +624,38 @@ pub async fn submit_candidate<H: HostServices>(
 /// intentionally not candidates.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DecodedStreamEvent {
+    TaskStarted { provider_task_id: String },
     Sentence(RemoteSentence),
     Heartbeat,
     SentenceStart,
+    TaskFinished { provider_task_id: String },
 }
 
 pub fn decode_stream_event(value: &Value) -> Result<DecodedStreamEvent, SafeError> {
     let header = value.get("header").unwrap_or(value);
     let payload = value.get("payload").unwrap_or(value);
-    if string_field(header, "event").as_deref() == Some("task-failed") {
+    let event = string_field(header, "event");
+    if event.as_deref() == Some("task-failed") {
         return Err(task_error(ErrorCode::ProviderError, "provider_stream_task_failed", false));
+    }
+    let provider_task_id = string_field(header, "task_id")
+        .or_else(|| string_field(payload, "task_id"))
+        .or_else(|| string_field(value, "task_id"));
+    if matches!(event.as_deref(), Some("task-started") | Some("task-finished")) {
+        let provider_task_id = provider_task_id
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| invalid("provider_task_id_missing"))?;
+        return Ok(match event.as_deref() {
+            Some("task-started") => DecodedStreamEvent::TaskStarted { provider_task_id },
+            Some("task-finished") => DecodedStreamEvent::TaskFinished { provider_task_id },
+            _ => unreachable!(),
+        });
     }
     let output = payload.get("output").unwrap_or(payload);
     let sentence = output.get("sentence").unwrap_or(output);
     if sentence.get("heartbeat").and_then(Value::as_bool).unwrap_or(false) {
         return Ok(DecodedStreamEvent::Heartbeat);
     }
-    let provider_task_id = string_field(header, "task_id").or_else(|| string_field(payload, "task_id")).or_else(|| string_field(value, "task_id"));
     let sentence_id = id_field(sentence, "sentence_id").or_else(|| id_field(sentence, "id"));
     let text = string_field(sentence, "text");
     let begin = u64_field(sentence, "begin_time").or_else(|| u64_field(sentence, "begin_time_ms"));
@@ -574,7 +693,10 @@ pub fn decode_stream_event(value: &Value) -> Result<DecodedStreamEvent, SafeErro
 pub fn decode_remote_sentence(value: &Value) -> Result<RemoteSentence, SafeError> {
     match decode_stream_event(value)? {
         DecodedStreamEvent::Sentence(sentence) => Ok(sentence),
-        DecodedStreamEvent::Heartbeat | DecodedStreamEvent::SentenceStart => Err(invalid("provider_event_is_not_complete_sentence")),
+        DecodedStreamEvent::TaskStarted { .. }
+        | DecodedStreamEvent::Heartbeat
+        | DecodedStreamEvent::SentenceStart
+        | DecodedStreamEvent::TaskFinished { .. } => Err(invalid("provider_event_is_not_complete_sentence")),
     }
 }
 
@@ -769,7 +891,7 @@ mod tests {
             sources: vec![], attachment_set_revision: "attach".into(), fact_set_revision: None,
             target_base_revision: None, edit_revision: None, language_tier: None, evidence_cutoff: vec![],
             available_at: "2026-01-01T00:00:00Z".into(), executor_id: "test".into(), executor_version: "1".into(),
-            model_id: Some(model), region: Some("cn-beijing".into()), prompt_version: Some("p".into()), parameters_hash: "hash".into(), calibration_seq: None, decision_seq: None,
+            model_id: Some(model), region: Some("cn-beijing".into()), prompt_version: Some(crate::PROMPT_ASR_STREAM_V1.into()), parameters_hash: "hash".into(), calibration_seq: None, decision_seq: None,
         }
     }
 
@@ -780,6 +902,7 @@ mod tests {
     #[test]
     fn streaming_final_replaces_provisional_but_never_final() {
         let mut session = StreamingSession::open(&open(), "remote-123", 2, 1).unwrap();
+        session.provider_task_started("remote-123").unwrap();
         let provisional = RemoteSentence { provider_task_id: "remote-123".into(), connection_epoch: 2, sentence_id: "s1".into(), finality: AsrRawCandidateState::Provisional, text: "hello".into(), begin_time_ms: 0, end_time_ms: 100, speaker_ref: None };
         assert!(matches!(session.accept_sentence(provisional.clone()).unwrap(), SentenceDisposition::New(_)));
         let mut final_sentence = provisional;
@@ -792,6 +915,20 @@ mod tests {
     }
 
     #[test]
+    fn streaming_event_sequence_rejects_early_and_late_events() {
+        let mut session = StreamingSession::open(&open(), "remote-123", 2, 1).unwrap();
+        let sentence = RemoteSentence { provider_task_id: "remote-123".into(), connection_epoch: 2, sentence_id: "s1".into(), finality: AsrRawCandidateState::Final, text: "hello".into(), begin_time_ms: 0, end_time_ms: 100, speaker_ref: None };
+        assert_eq!(session.accept_sentence(sentence.clone()).unwrap_err().code, ErrorCode::InvalidResult);
+        assert_eq!(session.request_finish().unwrap_err().code, ErrorCode::InvalidArgument);
+        assert_eq!(session.provider_task_started("wrong-task").unwrap_err().code, ErrorCode::StaleInput);
+        session.provider_task_started("remote-123").unwrap();
+        session.request_finish().unwrap();
+        session.provider_task_finished("remote-123").unwrap();
+        assert_eq!(session.accept_sentence(sentence).unwrap_err().code, ErrorCode::StaleInput);
+        assert_eq!(session.provider_task_finished("remote-123").unwrap_err().code, ErrorCode::Conflict);
+    }
+
+    #[test]
     fn streaming_refuses_non_streaming_model_or_slot() {
         let mut wrong_model = open();
         wrong_model.snapshot.model_id = Some(ModelId::QwenAudio31AsrFlashFiletrans);
@@ -799,6 +936,12 @@ mod tests {
         let mut wrong_slot = open();
         wrong_slot.binding = crate::binding_for_model(ModelId::Qwen38Flash);
         assert_eq!(validate_stream_open(&wrong_slot).unwrap_err().code, ErrorCode::InvalidArgument);
+        let mut wrong_prompt = open();
+        wrong_prompt.snapshot.prompt_version = Some("old_prompt".into());
+        assert_eq!(validate_stream_open(&wrong_prompt).unwrap_err().code, ErrorCode::InvalidArgument);
+        let mut old_contract = open();
+        old_contract.snapshot.contract_version = "1.0.0".into();
+        assert_eq!(validate_stream_open(&old_contract).unwrap_err().code, ErrorCode::UnsupportedVersion);
     }
 
     #[test]
@@ -837,6 +980,11 @@ mod tests {
         assert!(matches!(limited, RetryPlan::Retry { binding: carried, .. } if carried == binding));
         let auth = plan_retry(&task_error(ErrorCode::AuthRequired, "missing", false), 1, 3, &binding).unwrap();
         assert_eq!(auth, RetryPlan::Fail);
+        let auth_marked_retryable = plan_retry(&task_error(ErrorCode::AuthRequired, "marked", true), 1, 3, &binding).unwrap();
+        assert_eq!(auth_marked_retryable, RetryPlan::Fail);
+        let mut wrong_binding = binding.clone();
+        wrong_binding.credential_ref = focaus_contracts::CredentialRef::BailianBeijingMultimodal;
+        assert_eq!(plan_retry(&task_error(ErrorCode::NetworkUnavailable, "temporary", true), 1, 3, &wrong_binding).unwrap_err().code, ErrorCode::InvalidArgument);
     }
 
     #[test]
@@ -856,6 +1004,11 @@ mod tests {
         assert_eq!(map_relative_interval_with_sample_rate(&scaled, 0, 1000, 100).unwrap(), TimelineRange { start_ms: 0, end_ms: 1000 });
         let body = build_stream_run_task(&open(), "remote-123").unwrap();
         assert_eq!(body["payload"]["model"], STREAMING_MODEL_ID);
+        let envelope = build_stream_request_envelope(&open(), "remote-123", 2).unwrap();
+        assert_eq!(envelope.local_task_id, open().task_id);
+        assert_eq!(envelope.attempt, 2);
+        assert_eq!(envelope.binding.credential_ref, crate::binding_for_model(ModelId::QwenAudio31AsrFlashStreaming).credential_ref);
+        assert_eq!(envelope.provider_message["payload"]["model"], STREAMING_MODEL_ID);
         assert_eq!(body["payload"]["parameters"]["sample_rate"], 16_000);
         assert!(body["payload"]["parameters"].get("channels").is_none());
         assert_eq!(build_stream_finish_task("remote-123").unwrap()["payload"]["input"], serde_json::json!({}));

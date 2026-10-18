@@ -102,11 +102,12 @@ mod tests {
 
     #[test]
     fn public_shaped_fixtures_replay_without_network() {
-        assert!(matches!(decode_stream_event(&streaming_task_started()), Err(_)));
+        assert!(matches!(decode_stream_event(&streaming_task_started()), Ok(DecodedStreamEvent::TaskStarted { .. })));
         assert!(matches!(decode_stream_event(&streaming_sentence_start()).unwrap(), DecodedStreamEvent::SentenceStart));
         let DecodedStreamEvent::Sentence(sentence) = decode_stream_event(&streaming_sentence_final()).unwrap() else { panic!("sentence fixture expected") };
         assert_eq!(sentence.sentence_id, "1");
         assert_eq!(sentence.text, "欢迎使用阿里云。");
+        assert!(matches!(decode_stream_event(&streaming_task_finished()), Ok(DecodedStreamEvent::TaskFinished { .. })));
         let (task_id, status) = parse_filetrans_status(&filetrans_submitted()).unwrap();
         assert_eq!(task_id, "fixture-file-task");
         assert_eq!(status, FileTransStatus::Pending);

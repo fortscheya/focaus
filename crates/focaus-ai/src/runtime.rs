@@ -63,11 +63,13 @@ pub struct AudioFeedResult {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum AsrEventOutcome {
+    TaskStarted,
     Ignored,
     Candidate(AsrRawCandidate),
     Updated(AsrRawCandidate),
     Duplicate,
     Rejected(PublishDecision),
+    TaskFinished,
 }
 
 /// In-memory streaming adapter state. It is intentionally disposable and
@@ -144,6 +146,10 @@ impl AsrService {
             return Err(cancelled("asr_event_after_cancel"));
         }
         match decode_stream_event(value)? {
+            DecodedStreamEvent::TaskStarted { provider_task_id } => {
+                self.session.provider_task_started(&provider_task_id)?;
+                Ok(AsrEventOutcome::TaskStarted)
+            }
             DecodedStreamEvent::Heartbeat | DecodedStreamEvent::SentenceStart => Ok(AsrEventOutcome::Ignored),
             DecodedStreamEvent::Sentence(mut sentence) => {
                 sentence.connection_epoch = self.session.connection_epoch;
@@ -152,6 +158,10 @@ impl AsrService {
                     SentenceDisposition::Updated(candidate) => self.classify_candidate(candidate, true),
                     SentenceDisposition::Duplicate => Ok(AsrEventOutcome::Duplicate),
                 }
+            }
+            DecodedStreamEvent::TaskFinished { provider_task_id } => {
+                self.session.provider_task_finished(&provider_task_id)?;
+                Ok(AsrEventOutcome::TaskFinished)
             }
         }
     }
@@ -168,6 +178,7 @@ impl AsrService {
         if self.cancelled {
             return Err(cancelled("asr_finish_after_cancel"));
         }
+        self.session.request_finish()?;
         self.finish_sent = true;
         build_stream_finish_task(&self.session.provider_task_id)
     }
@@ -191,6 +202,19 @@ impl AsrService {
     }
 }
 
+/// Replay sanitized provider events through the same formal ASR state machine
+/// used by the host.  This is a local loopback entry only; it never opens a
+/// socket or reads credentials.
+pub fn replay_stream_events(
+    service: &mut AsrService,
+    events: &[Value],
+) -> Result<Vec<AsrEventOutcome>, SafeError> {
+    events
+        .iter()
+        .map(|event| service.ingest_provider_event(event))
+        .collect()
+}
+
 pub async fn submit_asr_outcome<H: crate::HostServices>(
     host: &H,
     outcome: AsrEventOutcome,
@@ -198,7 +222,11 @@ pub async fn submit_asr_outcome<H: crate::HostServices>(
 ) -> Result<Option<focaus_contracts::CommandResult>, SafeError> {
     match outcome {
         AsrEventOutcome::Candidate(candidate) | AsrEventOutcome::Updated(candidate) => Ok(Some(submit_candidate(host, &candidate, source_refs).await?)),
-        AsrEventOutcome::Ignored | AsrEventOutcome::Duplicate | AsrEventOutcome::Rejected(_) => Ok(None),
+        AsrEventOutcome::TaskStarted
+        | AsrEventOutcome::TaskFinished
+        | AsrEventOutcome::Ignored
+        | AsrEventOutcome::Duplicate
+        | AsrEventOutcome::Rejected(_) => Ok(None),
     }
 }
 
@@ -407,9 +435,17 @@ mod tests {
         let mut service = AsrService::new(AsrServiceConfig { open: open(), provider_task_id: "fixture-stream-task".into(), connection_epoch: 1, attempt: 1 }).unwrap();
         let feed = service.feed_chunk(AudioChunk { chunk_seq: 0, audio_span: focaus_contracts::AudioSpan { audio_span_id: "00000000-0000-4000-8000-000000000009".into(), recording_id: "00000000-0000-4000-8000-000000000007".into(), asset_id: Some("00000000-0000-4000-8000-000000000002".into()), track_id: Some("track".into()), frame_range: Some(FrameRange { start_frame: 0, end_frame: 1600 }), timeline_range: TimelineRange { start_ms: 0, end_ms: 100 }, mapping_revision_id: Some("00000000-0000-4000-8000-000000000001".into()), coverage_status: AudioSpanCoverageStatus::Captured, asr_coverage: AudioSpanAsrCoverage::Pending }, encoded_bytes: vec![1, 2], mapping: mapping() }).unwrap();
         assert_eq!(feed.audio_span_id, "00000000-0000-4000-8000-000000000009");
-        assert!(matches!(service.ingest_provider_event(&fixtures::streaming_sentence_start()).unwrap(), AsrEventOutcome::Ignored));
-        let outcome = service.ingest_provider_event(&fixtures::streaming_sentence_final()).unwrap();
-        assert!(matches!(outcome, AsrEventOutcome::Candidate(_)));
+        let events = vec![
+            fixtures::streaming_task_started(),
+            fixtures::streaming_sentence_start(),
+            fixtures::streaming_sentence_final(),
+        ];
+        let outcomes = replay_stream_events(&mut service, &events).unwrap();
+        assert!(matches!(&outcomes[0], AsrEventOutcome::TaskStarted));
+        assert!(matches!(&outcomes[1], AsrEventOutcome::Ignored));
+        assert!(matches!(&outcomes[2], AsrEventOutcome::Candidate(_)));
+        service.finish_task_request().unwrap();
+        assert!(matches!(&replay_stream_events(&mut service, &[fixtures::streaming_task_finished()]).unwrap()[0], AsrEventOutcome::TaskFinished));
         assert_eq!(build_stream_run_task(&open(), "fixture-stream-task").unwrap()["payload"]["model"], crate::models::STREAMING_ASR);
     }
 
