@@ -1,18 +1,19 @@
 # Active Context
 
 ## Current Task
-- 2026-10-18：总控推进G2可靠本地链；G0 3312e4e/G1 d9a8cdf6已完成，四个独立持久对话均已运行，不重新创建。
-- 总控01a14cae-d8ce-7053-bd12-737ea1bef020 / local，主分支codex/focaus-integration；四路真实ID/path/分支见docs/DEVELOPMENT.md。
-- 主continuity仅C写；互斥目录与C01–C09所有权继续。D170允许本地cherry-pick/merge及契约同步，不含push/rebase/发布/删除。
+- 2026-10-18：C推进G2真实本地链；G0 3312e4e/G1 d9a8cdf6完成；四个持久对话继续，不重建。
+- 总控01a14cae-d8ce-7053-bd12-737ea1bef020/local，codex/focaus-integration，HEAD=b4c9042；四路ID/path/模型证据见docs/DEVELOPMENT.md。主continuity仅C写。
+- D170允许本地cherry-pick/merge/契约同步，不含push/rebase/发布/删除。
 
 ## Current Evidence
-- 主分支已整合N存储/采集/IPC、F首批UI、A流程/transport、E资料sidecar；至fde9518。F native无fixture污染/事件ACK修复、N搜索/视图移交、A transport加固、E恢复边界在各worktree继续。
-- C真实NativeHost/SQLite双窗口集成测试通过：幂等、快照/ACK后事件、content.get、重启恢复、不自动采集。Tauri native-shell编译通过；尚未实际macOS窗口/麦克风验收。
-- Rust workspace测试、Python11项契约、TS37结构例/RFC8785、生成一致性通过；A25项与E4项通过。模块/合成fixture不等于产品验收。
-- 用户提供/Users/pitr/Desktop/SKD/DeepLearning；E完成L08/L09真实PDF light/deep本地抽取，82/86页，均partial搜索覆盖；原件/派生未纳管或上传。
-- 两qta AAC完整decode-to-null通过；APAC因ffmpeg缺decoder失败，未试听/选轨/绑定L8/L9，不认定原件损坏。
+- 已整合F录音/CAS、Unicode/数学、coverage包装和真实ContentView展示（d3507f0/c6a9ac1/52c7221/b4c9042），N资料托管/原子搜索投影（d2eb1ba），A runtime（150f3cd），E sidecar（1886d71）。
+- 实际嵌入WKWebView：空库bootstrap、键盘输入课程课堂、ACK2、CmdQ正常退出、重启snapshot2恢复及不自动开麦通过。最初旧版启动失败已由F修复；验收时需确保退出旧进程。
+- D173用户已允许约20秒本机默认麦克风+权限、仅.local/validation-library、不云/费用。第二轮最新App真实采集：ACK 4→121→147，UI水位约39秒、停止后状态stopped/时长约46秒；SQLite state=stopped、durable_watermark_ms=46730、integrity_check=ok，47个单声道48kHz float32 WAV、总字节8974356。未评ASR质量。
+- 最新整合验证：cargo workspace AI32/contracts6/native_flow2/wire2、native harness19/19、资料引擎10/10、TypeScript契约37、桌面Vitest7、typecheck/build、schema生成检查均通过；最新App ad-hoc签名通过。
+- 真实L08/L09 PDF仅本地抽取，82/86页，搜索partial；qta AAC解码通过/APAC缺decoder，未选轨/绑定课件。
 
 ## Next
-- 复核并整合F/A/N下一批精确diff及测试；实际运行macOS App，先空库/创建/重启/键盘/后台生命周期，再明确采集与云验收边界。
-- N接E资料入库/索引；C补真实纵向集成。契约2.0.0/material2.0.0/visualization1.0.0保持。
-- 真实云/上传/费用仍待具体授权。四专用槽位；不读/输出密钥。指定模型不换。grilling不重开。
+- F已提交并整合真实content.get投影（5e6186c）：note/raw/secondary/material/content_view/unsupported/partial分流，旧revision异步响应丢弃；继续做有资料真实命中和编辑/引用接线。N R0已提交907a56a：原声封口与SQLite登记解耦、journal/缺口恢复、删除屏障；C继续真实资料导入UI与逐页不可变parse版本接线。
+- 真实窗口已完成稳定身份/恢复/standalone bootstrap和六格注册观察；Command+F在空索引显示真实0态，真实命中待有内容投影后复验。
+- 真实云/上传/费用仍待具体授权；四专用凭据槽位不读取、不输出、不串用。
+- 契约2.0.0/material2.0.0/visualization1.0.0；四专用槽位，不读/输出密钥，指定模型不换，grilling不重开。

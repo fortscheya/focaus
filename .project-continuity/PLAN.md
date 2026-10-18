@@ -13,7 +13,7 @@
 ## Active: G2 Integration with Four Persistent Development Chats
 - G0 done：2026-10-18用户允许Git初始化。初始main仅纳管工程七文档、非敏感continuity及.gitignore；总控codex/focaus-integration，四路frontend/native/ai/materials从G1精确提交各自建worktree。详见docs/DEVELOPMENT.md；D170已授权本地整合。
 - G1 done（d9a8cdf6）：C01–C09单源跨语言类型/Schema、错误与capability、旧包适配/拒写/降级、最小SQL迁移、公共traits与composition stub、脱敏正反例及可重复检查；通过后本地提交共同基线。
-- G2 active：四路首批已整合到fde9518，真实NativeHost/SQLite双窗口/ACK/重启集成与native-shell编译通过；F/N/A/E继续下一批边界与真实宿主接线。G3–G5 planned：先可靠本地链与早期U11–U13，再获得云授权后的真实ASR/进度/focaus，随后三层/编辑/引用/对象与搜索，最后真实课程1倍速/课后全量/长录音恢复/课堂包。各模块commit或fixture通过不能关闭全体验收。
+- G2 active：四路成果已整合至6cfb206；真实NativeHost/SQLite、WKWebView空库/课程创建/重启、第二轮麦克风开始→水位→停止→重启恢复、stable standalone/六格 view注册、空索引Command+F和F真实content.get投影代码已通过对应验证。N R0 writer/SQLite隔离已通过28项原生回归；当前继续C的真实资料导入UI、逐页不可变parse版本接线和有资料搜索/三层内容端到端验收。G3–G5 planned：先可靠本地链与早期U11–U13，再获得云授权后的真实ASR/进度/focaus，随后三层/编辑/引用/对象与搜索，最后真实课程1倍速/课后全量/长录音恢复/课堂包。各模块commit或fixture通过不能关闭全体验收。
 - 四路已通过create_thread创建，实际路径/分支/基线已核验，完整§7.2–7.5任务与原样消息授权已下发；真实ID/host/path和配置证据见docs/DEVELOPMENT.md。总控唯一维护公共文件与continuity，持续read_thread/wait_threads复核并整合。
 - 产品模型/专用凭据继续INTERFACES §9.1，真实云调用/上传尚未获本阶段明确授权。qta先本地轨道核验与内容对齐，不按编号配课、不混轨、旧转写非真值。
 

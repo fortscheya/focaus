@@ -181,3 +181,6 @@
 - D171（2026-10-18，用户资料路径）：用户提供/Users/pitr/Desktop/SKD/DeepLearning用于真实课程验收。已找到L08/L09原始PDF，仅本地只读提取/预览获当前任务授权；原件/派生内容不纳管、不上传，旧笔记不作转写真值，qta与课堂对应仍未知。
 
 - D172（2026-10-18，总控工程编码澄清）：SourceRef结构revision沿D169用RFC8785；material原件版本引用(material_id/source_version_id)按C01资源字节SHA验证。SearchUnit/ExtractedSearchUnit的content_hash固定为display_text未经规范化的UTF8字节SHA，owner/revision仍是版本权威；此前D169笼统content hash描述在搜索字段投影上由本条细化，旧包适配同步修正。无序列化形状/产品语义变更，现2.0.0尚无部署数据；原始包保留，旧搜索投影可重建。跨语言golden与E真实子进程契约测试保证编码一致。
+
+- D173（2026-10-18，用户明确授权）：允许约20秒本机默认麦克风测试及focaus系统麦克风权限，采集仅存忽略的.local/validation-library，用于开始/关窗/停止/恢复；不上传/云调用/费用。用户说明环境无明显说话声，不能据此评判ASR。首轮实际34015ms因UI事件失败通过原生退出封口；后续修复复验沿用同范围，长录音/云仍另核授权。
+- D174（2026-10-18，总控实测记录）：第二轮使用最新签名App和同一忽略验证库完成开始、持续水位、停止封口、重启恢复、不自动开麦、standalone/六格 view注册和空索引Command+F；SQLite `state=stopped`、`durable_watermark_ms=46730`、integrity_check=ok，47个单声道48kHz float32 WAV。该结果只证明本地录音/宿主生命周期与窗口空态链，不证明ASR、云模型、资料正文、编辑/引用或真实课程验收。

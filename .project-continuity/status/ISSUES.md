@@ -41,3 +41,12 @@
 ## Resolved
 - I1［需求访谈已确认完成］2026-10-17用户Q127接受完整共同理解、qwen3.8-flash角色与1总控4开发（D157）；grilling完成。D160工程文档已编写，产品性能问题仍未实施/验证。
 - 尚无已实施或已验证关闭的产品问题；不要从参考手册推定现有产品缺陷。
+
+## G2 Observed Integration Defects
+- I29（2026-10-18，实际WKWebView+麦克风，已修复待扩大验收）：F将recording.coverage_changed的AudioAsset/AudioSpan当Session解析，曾导致ACK卡4且UI水位/停止反馈失真；F/N已修复事件分流并经第二轮真实采集 ACK4→121→147、停止封口和重启恢复复验。关窗继续与长录音仍未测。
+- I30（代码观察）：每run随机window ID使既存view承载悬空；N ec5a7a1提供稳定身份/恢复计划，总控已合入，物理窗接线未完成真实验收。
+
+- I34［真实本地复验已部分关闭］第二轮最新签名App在同一.validation-library-r2完成开始、持续水位、停止封口、重启恢复和不自动开麦；关窗继续录音、长录音恢复、真实资料导入UI和有资料搜索仍未测。录音WAV为float32，系统Python wave模块不能直接读取格式3，但RIFF头已核对为单声道48kHz/32bit，SQLite完整性通过。
+- I35［内容投影未完成］真实ContentView已由宿主注册并在native窗口显示，正文仍明确等待content.get/projection；standalone/六格只证明窗口与view状态链，不证明三层内容、编辑、引用或对象展示。
+- I36［资料版本边界］N已完成managed original/manifest接收和真实E纵向TXT闭环；E当前page_result仍是draft，逐页提前发布需按独立parse_version_id/parent_parse_version_id和变更对象新revision规则落实，不能原地改旧parse。
+- I37［R0已通过代码验证，设备边界未测］907a56a将原声文件封口/fsync/journal与SQLite登记队列分离，28项原生测试覆盖持锁写入、队列溢出、登记失败、缺口相邻、journal重启恢复和删除屏障；真实长录音、睡眠/拔插及SQL长占用下UI延迟仍未测。
