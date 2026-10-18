@@ -8,6 +8,7 @@ import type {
   EventBatch,
   HostAdapter,
   AppSnapshot,
+  ContentView,
   StateOpenInput,
   StateOpenResult,
   EvaluationResult,
@@ -181,7 +182,14 @@ export class FixtureHostAdapter implements HostAdapter {
 export interface NativeBootstrapResult {
   window_id: string;
   contract_version: string;
+  view_context?: {
+    view_id: string;
+    transfer_id: string | null;
+    base_view_revision: string | null;
+  } | null;
 }
+
+type NativeViewTransferContext = NonNullable<NativeBootstrapResult['view_context']>;
 
 /**
  * Native entry point. Tauri owns the authoritative window id and command validation.
@@ -217,6 +225,7 @@ export interface NativeRuntime {
   state: StateOpenResult;
   eventSeq: number;
   stopEvents: () => void;
+  readyView?: ContentView;
 }
 
 export interface FixtureRuntime {
@@ -244,9 +253,13 @@ export async function bootstrapNativeRuntime(onEventBatch: (batch: EventBatch) =
   }
   const adapter = createNativeHostAdapter(bootstrap.window_id);
   setActiveWindowId(bootstrap.window_id);
+  let transferContext: NativeViewTransferContext | null = bootstrap.view_context ?? null;
   // Subscribe before opening state so events committed during bootstrap are
   // not lost between the snapshot and the first acknowledgement.
   const stopEvents = await listen<EventBatch>('focaus://events', (event) => onEventBatch(event.payload));
+  const stopTransferEvents = await listen<NativeViewTransferContext>('focaus://view-transfer', (event) => {
+    transferContext = event.payload;
+  });
   try {
     const openResponse = await adapter.invoke('state.open', {
       scopes: [{kind: 'global'}],
@@ -264,9 +277,31 @@ export async function bootstrapNativeRuntime(onEventBatch: (batch: EventBatch) =
     if (ackResponse.status === 'error') {
       throw new Error(ackResponse.error?.message ?? 'state.ack 失败。');
     }
-    return {mode: 'native', windowId: bootstrap.window_id, adapter, state, eventSeq: state.snapshot_seq, stopEvents};
+    let readyView: ContentView | undefined;
+    const viewContext = transferContext;
+    if (viewContext?.transfer_id) {
+      const viewResponse = await adapter.invoke('content.get', {
+        entity_id: viewContext.view_id,
+        revision_id: viewContext.base_view_revision,
+        selector: null,
+      }, makeEnvelope('content.get', undefined, viewContext.base_view_revision ? {[viewContext.view_id]: viewContext.base_view_revision} : {}));
+      if (viewResponse.status !== 'ok' || !viewResponse.result) {
+        throw new Error(viewResponse.error?.message ?? 'view_context content.get 失败，旧承载保持不变。');
+      }
+      const viewResult = viewResponse.result && typeof viewResponse.result === 'object' && 'view' in viewResponse.result ? (viewResponse.result as {view: unknown}).view : viewResponse.result;
+      if (!viewResult || typeof viewResult !== 'object' || typeof (viewResult as {view_revision?: unknown}).view_revision !== 'string') {
+        throw new Error('view_context content.get 未返回合法 ContentView，旧承载保持不变。');
+      }
+      readyView = viewResult as ContentView;
+      const readyResponse = await adapter.invoke('view.ready', {transfer_id: viewContext.transfer_id, view_revision: readyView.view_revision}, makeEnvelope('view.ready', undefined, {[viewContext.view_id]: readyView.view_revision}));
+      if (readyResponse.status === 'error') {
+        throw new Error(readyResponse.error?.message ?? 'view.ready 失败，旧承载保持不变。');
+      }
+    }
+    return {mode: 'native', windowId: bootstrap.window_id, adapter, state, eventSeq: state.snapshot_seq, stopEvents: () => {stopEvents(); stopTransferEvents();}, readyView};
   } catch (error) {
     stopEvents();
+    stopTransferEvents();
     throw error;
   }
 }
