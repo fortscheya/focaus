@@ -28,6 +28,7 @@ tauri-build = { version = "2", optional = true }
 [features]
 default = []
 native-shell = ["dep:tauri", "dep:tauri-build", "dep:uuid"]
+custom-protocol = ["tauri/custom-protocol"]
 
 [[bin]]
 name = "focaus"
