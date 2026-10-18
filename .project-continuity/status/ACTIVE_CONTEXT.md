@@ -2,7 +2,7 @@
 
 ## Current Task
 - 2026-10-18：C推进G2真实本地链；G0 3312e4e/G1 d9a8cdf6完成；四个持久对话继续，不重建。
-- 总控01a14cae-d8ce-7053-bd12-737ea1bef020/local，codex/focaus-integration，HEAD=abcfda7；四路ID/path/模型证据见docs/DEVELOPMENT.md。主continuity仅C写。
+- 总控01a14cae-d8ce-7053-bd12-737ea1bef020/local，codex/focaus-integration；代码整合至0ced003，后续continuity证据另有本地提交；四路ID/path/模型证据见docs/DEVELOPMENT.md。主continuity仅C写。
 - D170允许本地cherry-pick/merge/契约同步，不含push/rebase/发布/删除。
 
 ## Current Evidence
