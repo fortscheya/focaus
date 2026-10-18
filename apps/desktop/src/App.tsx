@@ -19,6 +19,7 @@ import {
 } from './app/hostAdapter.ts';
 import {SerialNativeEventQueue} from './app/nativeEventQueue.ts';
 import {classifyRecordingEvent} from './app/nativeRecordingEvents.ts';
+import {detectNativeProjection, NativeProjectionGate, type NativeProjection} from './nativeContentProjection.ts';
 import type {SearchResultView} from './search/searchIndex.ts';
 
 type Screen = 'home' | 'workspace';
@@ -130,6 +131,14 @@ function extractViewsFromSnapshot(snapshot: unknown): ContentView[] {
   return group ? Object.values(group).map(parseContentView).filter((view): view is ContentView => Boolean(view)) : [];
 }
 
+function extractProjectionsFromSnapshot(snapshot: unknown): Record<string, NativeProjection> {
+  const record = asRecord(snapshot);
+  const records = record ? asRecord(record.records) : null;
+  const heads = records ? asRecord(records.content_heads) : null;
+  if (!heads) return {};
+  return Object.fromEntries(Object.entries(heads).map(([key, value]) => [key, detectNativeProjection(value, key, asRecord(value)?.revision_id as string | null ?? null)]));
+}
+
 export function App() {
   const fixtureRequested = useMemo(isFixtureRequested, []);
   const fixtureAdapter = useMemo(() => new FixtureHostAdapter(), []);
@@ -142,6 +151,7 @@ export function App() {
   const [lesson, setLesson] = useState<Lesson | null>(null);
   const [recordingSession, setRecordingSession] = useState<RecordingSession | null>(null);
   const [nativeContentHeads, setNativeContentHeads] = useState<Record<string, unknown>>({});
+  const [nativeProjections, setNativeProjections] = useState<Record<string, NativeProjection>>({});
   const [nativeViews, setNativeViews] = useState<ContentView[]>([]);
   const [activeNativeViewId, setActiveNativeViewId] = useState<string | null>(null);
   const [selectedViewId, setSelectedViewId] = useState(workspaceViews[0].id);
@@ -162,6 +172,8 @@ export function App() {
   const lessonRef = useRef<Lesson | null>(null);
   const recordingRef = useRef<RecordingSession | null>(null);
   const contentHeadsRef = useRef<Record<string, unknown>>({});
+  const projectionGate = useRef(new NativeProjectionGate());
+  const adapter: HostAdapter = runtime?.adapter ?? fixtureAdapter;
 
   useEffect(() => { courseRef.current = course; }, [course]);
   useEffect(() => { lessonRef.current = lesson; }, [lesson]);
@@ -208,6 +220,7 @@ export function App() {
           if (event.event_type.startsWith('content.')) {
             delete contentHeadsRef.current[event.entity_id];
             setNativeContentHeads({...contentHeadsRef.current});
+            setNativeProjections((current) => {const next = {...current}; delete next[event.entity_id]; return next;});
           }
           continue;
         }
@@ -266,6 +279,7 @@ export function App() {
         } else if (event.event_type.startsWith('content.')) {
           contentHeadsRef.current[event.entity_id] = response.result;
           setNativeContentHeads({...contentHeadsRef.current});
+          setNativeProjections((current) => ({...current, [event.entity_id]: detectNativeProjection(response.result, event.entity_id, event.revision_id)}));
         } else if (isViewEvent) {
           const nextView = parseContentViewResponse(response.result);
           if (!nextView) throw new Error(`事件 ${event.event_type} 的 content.get 未返回合法 ContentView`);
@@ -337,6 +351,7 @@ export function App() {
         recordingRef.current = library.recording;
         contentHeadsRef.current = {};
         setNativeContentHeads({});
+        setNativeProjections(extractProjectionsFromSnapshot(nextRuntime.state.snapshot));
         const snapshotViews = extractViewsFromSnapshot(nextRuntime.state.snapshot);
         const readyViews = nextRuntime.readyView ? [...snapshotViews.filter((view) => view.view_id !== nextRuntime.readyView?.view_id), nextRuntime.readyView] : snapshotViews;
         setNativeViews(readyViews);
@@ -362,6 +377,22 @@ export function App() {
   }, [fixtureAdapter, fixtureRequested, handleEventBatch, processNativeEventBatch]);
 
   useEffect(() => {
+    if (runtime?.mode !== 'native') return;
+    for (const view of nativeViews) {
+      if (view.target.kind !== 'entity') continue;
+      if (nativeProjections[view.target.entity_id]) continue;
+      const key = view.target.entity_id;
+      const revisionId = view.target.revision_id;
+      const selector = view.target.selector;
+      const token = projectionGate.current.begin(key);
+      void adapter.invoke('content.get', {entity_id: key, revision_id: revisionId, selector}, makeEnvelope('content.get', undefined, revisionId ? {[key]: revisionId} : {})).then((response) => {
+        if (!projectionGate.current.accepts(key, token) || response.status === 'error' || !response.result) return;
+        setNativeProjections((current) => ({...current, [key]: detectNativeProjection(response.result, key, revisionId)}));
+      });
+    }
+  }, [adapter, nativeProjections, nativeViews, runtime?.mode]);
+
+  useEffect(() => {
     const root = document.documentElement;
     if (theme === 'system') root.removeAttribute('data-theme');
     else root.setAttribute('data-theme', theme);
@@ -377,7 +408,6 @@ export function App() {
     return () => window.clearInterval(interval);
   }, [recordingState, runtime?.mode]);
 
-  const adapter: HostAdapter = runtime?.adapter ?? fixtureAdapter;
   const selectedView = workspaceViews.find((view) => view.id === selectedViewId) ?? workspaceViews[0];
 
   const invoke = useCallback(async <N extends CommandName>(name: N, payload: unknown, expectedRevisions: Record<string, string> = {}): Promise<CommandResult> => {
@@ -606,7 +636,7 @@ export function App() {
 
   if (isNativeRuntime) {
     const activeNativeView = nativeViews.find((view) => view.view_id === activeNativeViewId) ?? nativeViews[0] ?? null;
-    return <NativeWorkspace course={course} lesson={lesson} recording={recordingSession} adapter={adapter} activeView={activeNativeView} views={nativeViews} contentHeadCount={Object.keys(nativeContentHeads).length} eventSeq={eventSeq} snapshotSeq={snapshotSeq} notice={nativeNotice} screen={screen} onCreateCourseLesson={createCourseLesson} onOpenWorkspace={() => setScreen('workspace')} onBack={() => setScreen('home')} onToggleRecording={() => void toggleRecording()} onStopRecording={() => void stopRecording()} onStartUnassigned={() => void startRecording()} onRetryEvents={retryNativeEvents} onOpenView={(placement) => void openNativeView(placement)} searchOpen={searchOpen} onOpenSearch={() => setSearchOpen(true)} onCloseSearch={() => setSearchOpen(false)} />;
+    return <NativeWorkspace course={course} lesson={lesson} recording={recordingSession} adapter={adapter} activeView={activeNativeView} views={nativeViews} projections={nativeProjections} contentHeadCount={Object.keys(nativeContentHeads).length} eventSeq={eventSeq} snapshotSeq={snapshotSeq} notice={nativeNotice} screen={screen} onCreateCourseLesson={createCourseLesson} onOpenWorkspace={() => setScreen('workspace')} onBack={() => setScreen('home')} onToggleRecording={() => void toggleRecording()} onStopRecording={() => void stopRecording()} onStartUnassigned={() => void startRecording()} onRetryEvents={retryNativeEvents} onOpenView={(placement) => void openNativeView(placement)} searchOpen={searchOpen} onOpenSearch={() => setSearchOpen(true)} onCloseSearch={() => setSearchOpen(false)} />;
   }
 
   return (

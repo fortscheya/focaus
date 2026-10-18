@@ -4,6 +4,8 @@ import type {ContentView, Course, HostAdapter, Lesson, RecordingSession} from '@
 import {RecordingBar} from './RecordingBar.tsx';
 import {StatusBadge} from './StatusBadge.tsx';
 import {NativeSearchPanel} from './NativeSearchPanel.tsx';
+import {NativeContentRenderer} from './NativeContentRenderer.tsx';
+import type {NativeProjection} from '../nativeContentProjection.ts';
 
 export function NativeWorkspace({
   course,
@@ -12,6 +14,7 @@ export function NativeWorkspace({
   adapter,
   activeView,
   views,
+  projections,
   contentHeadCount,
   eventSeq,
   snapshotSeq,
@@ -35,6 +38,7 @@ export function NativeWorkspace({
   adapter: HostAdapter;
   activeView: ContentView | null;
   views: ContentView[];
+  projections: Record<string, NativeProjection>;
   contentHeadCount: number;
   eventSeq: number;
   snapshotSeq: number;
@@ -62,6 +66,8 @@ export function NativeWorkspace({
     if (view.target.kind === 'lesson_collection') return `${view.target.content_kind} · lesson ${view.target.lesson_id}`;
     return `entity · ${view.target.entity_id}`;
   };
+
+  const activeProjection = activeView ? projections[activeView.target.kind === 'entity' ? activeView.target.entity_id : activeView.view_id] ?? projections[activeView.view_id] ?? null : null;
 
   useEffect(() => {
     if (course) setCourseName(course.name);
@@ -124,6 +130,7 @@ export function NativeWorkspace({
           <div className="native-content-grid" aria-label="真实宿主内容状态">
             {views.length ? views.map((view) => <Card key={view.view_id} className={`native-empty-card ${activeView?.view_id === view.view_id ? 'native-view-card-active' : ''}`} variant="secondary"><Card.Header><Card.Title>真实 ContentView</Card.Title><Card.Description>{viewLabel(view)} · {view.state} · revision {view.view_revision}</Card.Description></Card.Header><Card.Content><div className="native-empty-icon" aria-hidden="true">{activeView?.view_id === view.view_id ? '●' : '○'}</div><p>宿主已注册该 view；正文、搜索命中与派生结果等待对应 content.get / projection 返回。</p></Card.Content></Card>) : ['当前课堂内容', '录音转写', '笔记', '课件', 'focaus', '可视化'].map((label) => <Card key={label} className="native-empty-card" variant="secondary"><Card.Header><Card.Title>{label}</Card.Title><Card.Description>宿主 content heads：{contentHeadCount} · 尚无 ContentView</Card.Description></Card.Header><Card.Content><div className="native-empty-icon" aria-hidden="true">·</div><p>当前没有可安全展示的真实内容。此 native 壳不会使用 fixture 正文、搜索命中或模型结果。</p></Card.Content></Card>)}
           </div>
+          <section className="native-projection-panel" aria-label="当前真实内容投影"><div className="native-projection-heading"><div><p className="eyebrow">content.get projection</p><h2>{activeView ? `当前 view · ${activeView.view_id}` : '等待真实 ContentView'}</h2></div><StatusBadge tone={activeProjection ? 'success' : 'neutral'}>{activeProjection ? activeProjection.kind : 'empty'}</StatusBadge></div><NativeContentRenderer projection={activeProjection} /></section>
           {!lesson ? <div className="native-empty-action"><Button onPress={onBack}>返回创建课堂</Button></div> : null}
         </main>
       )}
