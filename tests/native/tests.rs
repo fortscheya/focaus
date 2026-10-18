@@ -911,3 +911,53 @@ fn managed_resource_capability_rejects_links_escape_and_overwrite() {
         .unwrap();
     assert_eq!(content, "学习");
 }
+
+#[test]
+fn stable_window_binding_and_initial_standalone_failure_preserve_workspace() {
+    let db = TestLibrary::new();
+    let lesson = lesson(&db.store);
+    let owner = note(&db.store, &lesson, "恢复窗口");
+    let original = storage::id();
+    let grid = view(&db.store, &lesson, &owner, &original);
+    let windows = windows::WindowCoordinator::new(db.store.clone());
+    assert_eq!(
+        windows.persistent_window_id("main", None).unwrap(),
+        original
+    );
+    let reopened = storage::Store::open(&db.path, INITIAL_MIGRATION).unwrap();
+    assert_eq!(
+        windows::WindowCoordinator::new(reopened)
+            .persistent_window_id("main", None)
+            .unwrap(),
+        original
+    );
+    let standalone: ContentView = serde_json::from_value(
+        db.store
+            .write(|t| {
+                windows::open(
+                    t,
+                    &ViewOpenInput {
+                        lesson_id: lesson.clone(),
+                        target: grid.target.clone(),
+                        placement: ViewOpenInputPlacement::Standalone,
+                    },
+                    &original,
+                    None,
+                )
+            })
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(windows.restore_plan().unwrap().len(), 2);
+    windows
+        .initial_host_failed(&standalone.view_id, &standalone.host_window_id)
+        .unwrap();
+    assert_eq!(windows.restore_plan().unwrap().len(), 1);
+    assert_eq!(
+        db.store
+            .read(|c| windows::get(c, &grid.view_id))
+            .unwrap()
+            .state,
+        ContentViewState::Open
+    );
+}

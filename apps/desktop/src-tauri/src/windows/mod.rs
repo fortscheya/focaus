@@ -4,6 +4,14 @@ use crate::storage::{self, decode, emit, encode, sql_error, Result, Store};
 use focaus_contracts::*;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct WindowRestorePlan {
+    pub window_id: String,
+    pub placement: String,
+    pub view_ids: Vec<String>,
+}
 
 pub struct WindowCoordinator {
     store: Store,
@@ -29,6 +37,47 @@ impl WindowCoordinator {
                 rollback(t, id)?;
             }
             Ok(transfers.len() as u64)
+        })
+    }
+    /// Stable shell identity, persisted in the existing host intent registry.
+    /// Adopt a sole legacy grid host once, so earlier random-run IDs do not
+    /// strand an existing workspace on upgrade to the stable binding policy.
+    pub fn persistent_window_id(&self, role: &str, owner: Option<&str>) -> Result<String> {
+        if !["main", "course"].contains(&role) || (role == "course" && owner.is_none()) {
+            return Err(error(
+                ErrorCode::InvalidArgument,
+                "Invalid persistent window role",
+            ));
+        }
+        let key = canonical_hash(&json!([role, owner]));
+        self.store.write(|t| {
+            let old:Option<String>=t.query_row("SELECT response_json FROM idempotency WHERE actor_id='native.windows' AND command_name='register' AND idempotency_key=?1",[&key],|r|r.get(0)).optional().map_err(sql_error)?;
+            if let Some(old)=old{return Ok(decode::<Value>(&old)?["window_id"].as_str().ok_or_else(||error(ErrorCode::CorruptAsset,"Invalid window identity receipt"))?.into());}
+            let candidates={let mut q=t.prepare("SELECT DISTINCT v.host_window_id FROM views v JOIN lessons l ON l.lesson_id=v.lesson_id WHERE json_extract(v.state_json,'$.placement')='grid' AND (?1 IS NULL OR l.course_id=?1) ORDER BY v.rowid").map_err(sql_error)?;let ids=q.query_map([owner],|r|r.get::<_,String>(0)).map_err(sql_error)?.collect::<std::result::Result<Vec<_>,_>>().map_err(sql_error)?;ids};
+            let id=if candidates.len()==1{candidates[0].clone()}else{storage::id()};
+            t.execute("INSERT INTO idempotency VALUES('native.windows','register',?1,?1,?2)",params![key,encode(&json!({"window_id":id,"role":role,"owner_id":owner}))?]).map_err(sql_error)?;Ok(id)
+        })
+    }
+    pub fn restore_plan(&self) -> Result<Vec<WindowRestorePlan>> {
+        self.store.read(|c|{
+            let mut grouped:BTreeMap<String,WindowRestorePlan>=BTreeMap::new();let mut q=c.prepare("SELECT view_id,host_window_id,state_json FROM views WHERE json_extract(state_json,'$.state')<>'closed' ORDER BY rowid").map_err(sql_error)?;
+            for row in q.query_map([],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?))).map_err(sql_error)?{let(view,window,state)=row.map_err(sql_error)?;let state:Value=decode(&state)?;let plan=grouped.entry(window.clone()).or_insert(WindowRestorePlan {window_id:window,placement:state["placement"].as_str().unwrap_or("grid").into(),view_ids:Vec::new()});plan.view_ids.push(view);}
+            Ok(grouped.into_values().collect())
+        })
+    }
+    /// Target creation/ready timeout cleanup touches only this pending handoff.
+    /// Already committed transfers are immutable and are never rolled back.
+    pub fn rollback_transfer(&self, transfer_id: &str) -> Result<()> {
+        self.store.write(|t| rollback(t, transfer_id))
+    }
+    pub fn confirm_initial_view(&self, view_id: &str, window: &str) -> Result<()> {
+        self.store.write(|t|{authorize(t,view_id,window)?;t.execute("UPDATE views SET state_json=json_set(state_json,'$.initial_host_pending',json('false')) WHERE view_id=?1",[view_id]).map_err(sql_error)?;Ok(())})
+    }
+    pub fn initial_host_failed(&self, view_id: &str, window: &str) -> Result<()> {
+        self.store.write(|t|{authorize(t,view_id,window)?;let state:String=t.query_row("SELECT state_json FROM views WHERE view_id=?1",[view_id],|r|r.get(0)).map_err(sql_error)?;let state:Value=decode(&state)?;
+            if state["state"]=="closed"{return Ok(());}
+            if state["placement"]!="standalone"||state["initial_host_pending"]!=true{return Err(error(ErrorCode::Conflict,"Initial host failure is stale"));}
+            set_visibility(t,view_id,window,"closed",None)?;t.execute("UPDATE views SET state_json=json_set(state_json,'$.initial_host_pending',json('false')) WHERE view_id=?1",[view_id]).map_err(sql_error)?;Ok(())
         })
     }
 }
@@ -104,7 +153,7 @@ pub(crate) fn open(
     };
     let vid = storage::id();
     let revision = storage::id();
-    let state = json!({"state":"open","placement":input.placement,"draft_revision":null,"selection":null,"scroll":0,"camera":null,"search":null});
+    let state = json!({"state":"open","placement":input.placement,"initial_host_pending":standalone,"draft_revision":null,"selection":null,"scroll":0,"camera":null,"search":null});
     t.execute(
         "INSERT INTO views VALUES(?1,?2,?3,?4,?5,?6)",
         params![
