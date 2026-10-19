@@ -51,20 +51,32 @@ def _rebind_material_selectors(value, parse_version_id: str):
     return value
 
 
-def _coverage(ctx: ExtractionContext, drafts: Sequence[PageDraft], expected_page_count: Optional[int] = None) -> dict:
-    requested_pages = [draft.page_id for draft in drafts]
-    processed_pages = [draft.page_id for draft in drafts if draft.processed_for_search]
+def _coverage(ctx: ExtractionContext, drafts: Sequence[PageDraft], requested_page_indices: Sequence[int]) -> dict:
+    """Build stable task-wide coverage for a cumulative publication.
+
+    A checkpoint manifest contains only pages published so far, but its search
+    coverage describes the complete task.  Page IDs are deterministic from the
+    source-page index, so unpublished pages can be named in coverage without
+    inventing temporary entities or changing ``requested_pages`` on each
+    publication.
+    """
+    requested_pages = [ctx.ids.id("page", str(index)) for index in requested_page_indices]
+    published_by_index = {draft.index: draft for draft in drafts}
+    processed_ids = {
+        draft.page_id for draft in drafts if draft.processed_for_search
+    }
+    processed_pages = [page_id for page_id in requested_pages if page_id in processed_ids]
     unprocessed = [area for draft in drafts for area in draft.coverage_unprocessed]
     failed = [area for draft in drafts for area in draft.coverage_failed]
-    if expected_page_count is not None and len(drafts) < expected_page_count:
-        unprocessed.extend(
-            {
-                "page_id": None,
-                "region_id": None,
-                "reason": "page_not_published_yet",
-            }
-            for _ in range(expected_page_count - len(drafts))
-        )
+    for index in requested_page_indices:
+        if index not in published_by_index:
+            unprocessed.append(
+                {
+                    "page_id": ctx.ids.id("page", str(index)),
+                    "region_id": None,
+                    "reason": "page_not_published_yet",
+                }
+            )
     if not drafts or (not processed_pages and (unprocessed or failed)):
         state = "unavailable"
     elif unprocessed or failed or len(processed_pages) != len(requested_pages):
@@ -94,7 +106,7 @@ def assemble_manifest(
     provenance_extra: Optional[dict] = None,
 ) -> dict:
     draft_list = sorted(list(drafts), key=lambda draft: draft.index)
-    coverage = _coverage(ctx, draft_list, expected_page_count)
+    coverage = _coverage(ctx, draft_list, requested_pages)
     parse_version_id = publication_parse_version_id or ctx.parse_version_id
     parent_parse_version_id = publication_parent_parse_version_id if publication_parent_parse_version_id is not None else ctx.parent_parse_version_id
     pages = [_rebind_material_selectors(draft.page, parse_version_id) for draft in draft_list]
@@ -423,7 +435,16 @@ def validate_manifest(manifest: dict, staging_root: Path, *, check_resources: bo
                 correction_parse_versions=correction_parse_versions,
             )
     coverage = manifest["search_coverage"]
-    if not set(coverage.get("requested_pages", [])) <= page_ids or not set(coverage.get("processed_pages", [])) <= page_ids:
+    coverage_requested_pages = set(coverage.get("requested_pages", []))
+    coverage_processed_pages = set(coverage.get("processed_pages", []))
+    coverage_unprocessed_pages = {
+        area.get("page_id")
+        for area in coverage.get("unprocessed", [])
+        if area.get("page_id") is not None
+    }
+    if not coverage_unprocessed_pages <= coverage_requested_pages:
+        raise EngineError("INVALID_RESULT", "search coverage has an unknown unprocessed page", scope="page")
+    if not coverage_requested_pages <= page_ids | coverage_unprocessed_pages or not coverage_processed_pages <= page_ids:
         raise EngineError("INVALID_RESULT", "search coverage page closure is incomplete", scope="page")
     if manifest["completion"] == "complete" and coverage.get("state") != "complete":
         raise EngineError("INVALID_RESULT", "complete manifest has incomplete search coverage", scope="asset")

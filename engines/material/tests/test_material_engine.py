@@ -206,6 +206,16 @@ class MaterialEngineTests(TestCase):
         self.assertEqual([item["manifest"]["parse_version_id"] for item in page_results], published[:2])
         self.assertEqual([len(item["manifest"]["pages"]) for item in page_results], [1, 2])
         self.assertIsNone(manifest["parent_parse_version_id"])
+        requested_page_ids = [page["page_id"] for page in manifest["pages"]]
+        self.assertEqual(page_results[0]["manifest"]["search_coverage"]["requested_pages"], requested_page_ids)
+        self.assertEqual(page_results[1]["manifest"]["search_coverage"]["requested_pages"], requested_page_ids)
+        self.assertEqual(page_results[0]["manifest"]["search_coverage"]["processed_pages"], [requested_page_ids[0]])
+        self.assertEqual(page_results[1]["manifest"]["search_coverage"]["processed_pages"], requested_page_ids)
+        self.assertEqual(
+            [area["page_id"] for area in page_results[0]["manifest"]["search_coverage"]["unprocessed"]],
+            [requested_page_ids[1]],
+        )
+        self.assertEqual(page_results[1]["manifest"]["search_coverage"]["unprocessed"], [])
         for index, page_result in enumerate(page_results):
             publication_id = published[index]
             self.assertEqual(page_result["parse_version_id"], publication_id)
