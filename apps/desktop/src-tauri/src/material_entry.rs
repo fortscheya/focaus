@@ -13,7 +13,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::{
     io::{BufRead, BufReader, Write},
-    process::{Command, Stdio},
+    process::{Child, Command, Stdio},
     sync::mpsc,
     time::Duration,
 };
@@ -32,6 +32,36 @@ pub struct MaterialJobHandle {
     pub source_version_id: String,
     pub parse_version_id: String,
     pub parent_parse_version_id: Option<String>,
+}
+
+struct SidecarProcess {
+    child: Child,
+    reaped: bool,
+}
+
+impl SidecarProcess {
+    fn new(child: Child) -> Self {
+        Self {
+            child,
+            reaped: false,
+        }
+    }
+
+    fn reap(&mut self) -> std::io::Result<std::process::ExitStatus> {
+        let status = self.child.wait()?;
+        self.reaped = true;
+        Ok(status)
+    }
+}
+
+impl Drop for SidecarProcess {
+    fn drop(&mut self) {
+        if !self.reaped {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+            self.reaped = true;
+        }
+    }
 }
 
 pub fn job_handle(host: &NativeHost, task_id: &str) -> Result<MaterialJobHandle, SafeError> {
@@ -113,7 +143,7 @@ fn run_local_sidecar_inner(
         task_id: None,
         payload: json!({}),
     };
-    let mut child = Command::new(python)
+    let child = Command::new(python)
         .args(["-m", "material_engine"])
         .env("PYTHONPATH", module_root)
         .env("PYTHONDONTWRITEBYTECODE", "1")
@@ -127,13 +157,14 @@ fn run_local_sidecar_inner(
                 "Local material engine could not start",
             )
         })?;
-    let mut stdin = child.stdin.take().ok_or_else(|| {
+    let mut child = SidecarProcess::new(child);
+    let mut stdin = child.child.stdin.take().ok_or_else(|| {
         error(
             focaus_contracts::ErrorCode::ProviderError,
             "Local material engine input unavailable",
         )
     })?;
-    let stdout = child.stdout.take().ok_or_else(|| {
+    let stdout = child.child.stdout.take().ok_or_else(|| {
         error(
             focaus_contracts::ErrorCode::ProviderError,
             "Local material engine output unavailable",
@@ -252,7 +283,7 @@ fn run_local_sidecar_inner(
             }
         }
     }
-    let status = child.wait().map_err(|_| {
+    let status = child.reap().map_err(|_| {
         error(
             focaus_contracts::ErrorCode::ProviderError,
             "Cannot wait for material engine",
