@@ -6,7 +6,7 @@ set -euo pipefail
 
 script_dir="${0:A:h}"
 repo_root="${FOCAUS_REPO_ROOT:-${script_dir:h:h:h:h}}"
-binary="${FOCAUS_DESKTOP_BINARY:-$repo_root/target/debug/focaus-desktop}"
+binary="${FOCAUS_DESKTOP_BINARY:-$repo_root/target/debug/focaus}"
 engine="${FOCAUS_MATERIAL_ENGINE:-$repo_root/engines/material}"
 python="${FOCAUS_MATERIAL_ENGINE_PYTHON:-}"
 
