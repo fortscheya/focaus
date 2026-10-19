@@ -32,16 +32,18 @@ describe('native lesson material scope hydration', () => {
     expect(adapter.invoke).not.toHaveBeenCalled();
   });
 
-  it('re-reads the same lesson revision and accepts only a host returned scope', async () => {
-    const adapter = adapterWith({lesson: baseLesson(['material-1'])});
+  it('re-reads the current lesson head and accepts a newer host revision', async () => {
+    const adapter = adapterWith({lesson: {...baseLesson(['material-1']), revision_id: 'lesson-revision-2'}});
     const hydrated = await hydrateLessonMaterialScope(adapter, baseLesson(), 'window-1');
     expect(hydrated.hydrated).toBe(true);
     expect(hydrated.lesson?.material_scope).toEqual(['material-1']);
+    expect(hydrated.lesson?.revision_id).toBe('lesson-revision-2');
     expect(adapter.invoke).toHaveBeenCalledWith('content.get', {
       entity_id: 'lesson-1',
-      revision_id: 'lesson-revision-1',
+      revision_id: null,
       selector: null,
-    }, expect.objectContaining({expected_revisions: {'lesson-1': 'lesson-revision-1'}, window_id: 'window-1'}));
+    }, expect.objectContaining({window_id: 'window-1'}));
+    expect((adapter.invoke as ReturnType<typeof vi.fn>).mock.calls[0][2].expected_revisions).toEqual({});
   });
 
   it('does not invent an ID when the authoritative lesson still has no scope', async () => {

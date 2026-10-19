@@ -38,14 +38,17 @@ function responseError(response: {status: string; error?: {message?: string; cod
   return response.error?.message ?? response.error?.code ?? '宿主没有返回 lesson hydration 结果。';
 }
 
-/** Re-read the authoritative lesson revision when state.open omitted its material scope. */
+/** Re-read the authoritative lesson head when state.open omitted its material scope. */
 export async function hydrateLessonMaterialScope(adapter: HostAdapter, lesson: Lesson | null, windowId?: string): Promise<LessonHydrationResult> {
   if (!lesson || !lessonNeedsMaterialHydration(lesson)) return {lesson, attempted: false, hydrated: false, error: null};
   try {
-    const response = await adapter.invoke('content.get', {entity_id: lesson.lesson_id, revision_id: lesson.revision_id, selector: null}, makeEnvelope('content.get', windowId, {[lesson.lesson_id]: lesson.revision_id}));
+    // The lesson revision carried by state.open can be older than a material
+    // import that committed a new authoritative lesson head. Asking for that
+    // old revision would correctly return an empty historical scope forever.
+    const response = await adapter.invoke('content.get', {entity_id: lesson.lesson_id, revision_id: null, selector: null}, makeEnvelope('content.get', windowId));
     if (response.status !== 'ok' || !response.result) return {lesson, attempted: true, hydrated: false, error: response.status === 'error' ? responseError(response) : '宿主尚未返回可用 lesson projection。'};
     const hydrated = parseLessonResponse(response.result);
-    if (!hydrated || hydrated.lesson_id !== lesson.lesson_id || hydrated.revision_id !== lesson.revision_id) return {lesson, attempted: true, hydrated: false, error: 'lesson hydration 返回的实体或 revision 与 state.open 不一致。'};
+    if (!hydrated || hydrated.lesson_id !== lesson.lesson_id) return {lesson, attempted: true, hydrated: false, error: 'lesson hydration 返回的实体与当前课堂不一致。'};
     if (!hydrated.material_scope.length) return {lesson, attempted: true, hydrated: false, error: 'lesson hydration 仍缺少 material_scope；不会猜测资料实体 ID。'};
     return {lesson: hydrated, attempted: true, hydrated: true, error: null};
   } catch (error) {
