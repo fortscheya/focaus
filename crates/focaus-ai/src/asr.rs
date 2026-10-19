@@ -910,6 +910,7 @@ pub enum PublishDecision {
     Accept,
     Duplicate,
     DropCancelled,
+    StaleTask,
     StaleAttempt,
     StaleSnapshot,
     StaleAssignment,
@@ -940,8 +941,11 @@ impl ResultGate {
     }
 
     pub fn classify(&mut self, candidate: &AsrRawCandidate) -> PublishDecision {
-        if self.cancelled || candidate.task_id != self.task_id {
+        if self.cancelled {
             return PublishDecision::DropCancelled;
+        }
+        if candidate.task_id != self.task_id {
+            return PublishDecision::StaleTask;
         }
         if candidate.attempt != self.current_attempt {
             return PublishDecision::StaleAttempt;
@@ -1112,6 +1116,9 @@ mod tests {
         let mut gate = ResultGate::new("local", 1, "snap", Some(1), Some(1));
         assert_eq!(gate.classify(&candidate), PublishDecision::Accept);
         assert_eq!(gate.classify(&candidate), PublishDecision::Duplicate);
+        let mut wrong_task = candidate.clone();
+        wrong_task.task_id = "other-task".into();
+        assert_eq!(gate.classify(&wrong_task), PublishDecision::StaleTask);
         gate.cancel();
         assert_eq!(gate.classify(&candidate), PublishDecision::DropCancelled);
         let mut assignment_gate = ResultGate::new("local", 1, "snap", Some(1), Some(1));
