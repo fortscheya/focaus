@@ -555,7 +555,7 @@ impl MaterialService {
             t.execute("INSERT INTO materials VALUES(?1,?2,?3,?4,?5)",params![material,source_version,resource,extension,display]).map_err(sql_error)?;t.execute("INSERT INTO resource_owners VALUES(?1,?2)",params![resource,material]).map_err(sql_error)?;
             commit_entity(t,&attachment,"material_attachment",json!({"attachment_id":attachment,"material_id":material,"lesson_id":lesson,"purpose":purpose,"pages":pages,"lifecycle":"active","revision_id":storage::id()}),"content.committed",json!({"kind":"lesson","lesson_id":lesson}),None,None)?;
             t.execute("INSERT INTO material_attachments VALUES(?1,?2,?3,NULL,?4,?5,'active')",params![attachment,material,lesson,storage::value(&purpose)?.as_str().unwrap_or(""),encode(&pages)?]).map_err(sql_error)?;
-            let mut lesson_body=head(t,lesson)?;lesson_body["material_scope"].as_array_mut().ok_or_else(||error(ErrorCode::CorruptAsset,"Invalid lesson material scope"))?.push(json!(attachment));
+            let mut lesson_body=head(t,lesson)?;lesson_body["material_scope"].as_array_mut().ok_or_else(||error(ErrorCode::CorruptAsset,"Invalid lesson material scope"))?.push(json!(material));
             let updated=commit_entity(t,lesson,"lesson",lesson_body,"content.committed",json!({"kind":"lesson","lesson_id":lesson}),None,None)?;t.execute("UPDATE lessons SET attachment_set_revision=?2 WHERE lesson_id=?1",params![lesson,updated["revision_id"].as_str()]).map_err(sql_error)?;
             Ok(body)
         });

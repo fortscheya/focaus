@@ -1232,6 +1232,40 @@ fn old_stop_request_cannot_cross_pause_or_assignment_epoch() {
 }
 
 #[test]
+fn material_import_scopes_lesson_to_material_id() {
+    let db = TestLibrary::new();
+    let host = ipc::NativeHost::open(&db.path, INITIAL_MIGRATION).unwrap();
+    let lesson_id = lesson(&db.store);
+    let source_file = db.path.join("scope.txt");
+    std::fs::write(&source_file, "scope source").unwrap();
+
+    let job = host
+        .import_material_original(
+            &source_file,
+            &lesson_id,
+            MaterialImportInputPurpose::Textbook,
+            vec![0],
+        )
+        .unwrap();
+    let lesson_head = host.store.head(&lesson_id).unwrap();
+    let (attachment_id, attachment_material_id) = host
+        .store
+        .read(|c| {
+            c.query_row(
+                "SELECT attachment_id, material_id FROM material_attachments WHERE lesson_id=?1",
+                [&lesson_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .map_err(storage::sql_error)
+        })
+        .unwrap();
+
+    assert_eq!(lesson_head["material_scope"], json!([job.material_id]));
+    assert_ne!(lesson_head["material_scope"], json!([attachment_id]));
+    assert_eq!(attachment_material_id, job.material_id);
+}
+
+#[test]
 #[ignore = "requires an integrated material_engine module; set FOCAUS_TEST_MATERIAL_ENGINE"]
 fn material_sidecar_roundtrip_uses_managed_original_and_host_search() {
     use std::{
