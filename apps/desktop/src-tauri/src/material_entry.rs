@@ -510,6 +510,111 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires FOCAUS_MATERIAL_ENGINE and a local material_engine checkout"]
+    fn configured_sidecar_command_roundtrip_publishes_material_and_search() {
+        use std::path::Path;
+
+        assert!(std::env::var_os("FOCAUS_MATERIAL_ENGINE").is_some());
+        let root = std::env::temp_dir().join(format!(
+            "focaus-sidecar-command-{}",
+            crate::storage::id()
+        ));
+        let host = crate::ipc::NativeHost::open(&root, crate::INITIAL_MIGRATION).unwrap();
+        let window = crate::storage::id();
+        host.bind_window(
+            "main",
+            &window,
+            vec![serde_json::from_value(json!({"kind":"global"})).unwrap()],
+        )
+        .unwrap();
+        let command = |name: &str, payload: Value| {
+            serde_json::from_value(json!({
+                "contract_version":"2.0.0",
+                "command_id":crate::storage::id(),
+                "actor":"user",
+                "window_id":window,
+                "name":name,
+                "payload":payload,
+                "idempotency_key":crate::storage::id(),
+                "expected_revisions":{}
+            }))
+            .unwrap()
+        };
+        let course = host
+            .dispatch_webview(
+                "main",
+                command("course.create", json!({"name":"native sidecar command"})),
+            )
+            .unwrap()
+            .result
+            .unwrap();
+        let lesson = host
+            .dispatch_webview(
+                "main",
+                command(
+                    "lesson.create",
+                    json!({
+                        "course_id":course["course_id"],
+                        "title":"local sidecar command",
+                        "actual_date":null,
+                        "timezone":"Asia/Shanghai"
+                    }),
+                ),
+            )
+            .unwrap()
+            .result
+            .unwrap();
+        let source = root.join("source.txt");
+        std::fs::write(&source, "native command Straße 学习 😀").unwrap();
+        let job = host
+            .import_material_original(
+                &source,
+                lesson["lesson_id"].as_str().unwrap(),
+                MaterialImportInputPurpose::Textbook,
+                vec![0],
+            )
+            .unwrap();
+        std::fs::remove_file(&source).unwrap();
+
+        let result = run_local_sidecar(&host, &job.task.task_id).unwrap();
+        assert_eq!(result["publication"], "committed");
+        let task = host.tasks.get(&job.task.task_id).unwrap();
+        assert_eq!(task.state, TaskState::Succeeded);
+        let head = host.store.head(&job.material_id).unwrap();
+        assert_eq!(head["parse_version_id"], job.parse_version_id);
+        assert!(Path::new(&job.input.source_handle).is_file());
+        let manifest = host
+            .store
+            .read(|c| {
+                crate::library::get_content(
+                    c,
+                    &focaus_contracts::ContentGetInput {
+                        entity_id: job.material_id.clone(),
+                        revision_id: Some(job.parse_version_id.clone()),
+                        selector: None,
+                    },
+                )
+            })
+            .unwrap();
+        assert_eq!(manifest["format_version"], "2.0.0");
+        assert!(!manifest["resources"].as_array().unwrap().is_empty());
+        let projection_count = host
+            .store
+            .read(|c| {
+                c.query_row(
+                    "SELECT COUNT(*) FROM search_index_state WHERE scope_id LIKE ?1",
+                    [format!("{}:%", job.material_id)],
+                    |row| row.get::<_, u64>(0),
+                )
+                .map_err(crate::storage::sql_error)
+            })
+            .unwrap();
+        assert!(projection_count > 0);
+        drop(host);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn picker_wait_is_bounded_and_distinguishes_timeout_from_callback_disconnect() {
         assert!(PICKER_RESPONSE_TIMEOUT > Duration::from_secs(15));
         assert!(PICKER_RESPONSE_TIMEOUT <= Duration::from_secs(10 * 60));
