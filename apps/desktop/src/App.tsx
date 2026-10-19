@@ -21,6 +21,7 @@ import {
 } from './app/hostAdapter.ts';
 import {SerialNativeEventQueue} from './app/nativeEventQueue.ts';
 import {classifyRecordingEvent} from './app/nativeRecordingEvents.ts';
+import {hydrateLessonMaterialScope, lessonNeedsMaterialHydration, parseLesson, parseLessonResponse} from './app/nativeLessonHydration.ts';
 import {detectNativeProjection, nativeProjectionRevision, NativeProjectionGate, type NativeProjection} from './nativeContentProjection.ts';
 import {parseMaterialTaskError, type MaterialTaskFeedback} from './material/materialAdapter.ts';
 import type {SearchResultView} from './search/searchIndex.ts';
@@ -67,12 +68,6 @@ function parseCourse(value: unknown): Course | null {
   return record as unknown as Course;
 }
 
-function parseLesson(value: unknown): Lesson | null {
-  const record = asRecord(value);
-  if (!record || typeof record.lesson_id !== 'string' || typeof record.course_id !== 'string' || typeof record.title !== 'string' || typeof record.revision_id !== 'string' || typeof record.entity_seq !== 'number') return null;
-  return record as unknown as Lesson;
-}
-
 function parseRecording(value: unknown): RecordingSession | null {
   const record = asRecord(value);
   if (!record || typeof record.recording_id !== 'string' || typeof record.state !== 'string' || !isRecordingState(record.state) || typeof record.assignment_epoch !== 'number' || typeof record.durable_watermark_ms !== 'number' || typeof record.revision_id !== 'string' || typeof record.entity_seq !== 'number') return null;
@@ -107,10 +102,6 @@ function parseRecordingResponse(result: unknown): RecordingSession | null {
 
 function parseCourseResponse(result: unknown): Course | null {
   return parseCourse(unwrapEntity(result, 'course')) ?? parseCourse(result);
-}
-
-function parseLessonResponse(result: unknown): Lesson | null {
-  return parseLesson(unwrapEntity(result, 'lesson')) ?? parseLesson(result);
 }
 
 function parseContentView(value: unknown): ContentView | null {
@@ -240,6 +231,54 @@ export function App() {
   useEffect(() => { recordingRef.current = recordingSession; }, [recordingSession]);
   useEffect(() => { materialTaskFeedbackRef.current = materialTaskFeedback; }, [materialTaskFeedback]);
 
+  const hydrateNativeLesson = useCallback(async (activeAdapter: HostAdapter, candidate: Lesson | null, windowId: string, noticePrefix: string) => {
+    const result = await hydrateLessonMaterialScope(activeAdapter, candidate, windowId);
+    if (result.hydrated && result.lesson) {
+      lessonRef.current = result.lesson;
+      setLesson(result.lesson);
+    }
+    if (result.error) setNativeNotice(`${noticePrefix}：${result.error}`);
+    return result;
+  }, []);
+
+  const readMaterialHead = useCallback(async (activeAdapter: HostAdapter, materialId: string, windowId: string, successMessage: string): Promise<string | null> => {
+    const token = projectionGate.current.begin(materialId, null);
+    setNativeNotice('正在读取宿主当前 material head；旧 projection 保持可见，直到新 revision 校验通过。');
+    const response = await activeAdapter.invoke('content.get', {entity_id: materialId, revision_id: null, selector: null}, makeEnvelope('content.get', windowId));
+    if (response.status === 'error' || !response.result) {
+      setNativeNotice('读取 material head 失败：' + (response.error?.message ?? response.error?.code ?? '宿主尚未返回可用 material projection。'));
+      return null;
+    }
+    const responseRevision = nativeProjectionRevision(response.result, null);
+    if (!responseRevision || !projectionGate.current.accepts(materialId, token, responseRevision)) {
+      setNativeNotice('material head 没有返回可校验 revision；保留当前 projection。');
+      return null;
+    }
+    const currentRevision = nativeProjectionRevision(contentHeadsRef.current[materialId], null);
+    if (currentRevision === responseRevision) {
+      setNativeNotice('宿主返回的 material head 与当前 revision 相同；没有替换当前 projection。');
+      return responseRevision;
+    }
+    const nextProjection = detectNativeProjection(response.result, materialId, responseRevision);
+    contentHeadsRef.current[materialId] = response.result;
+    setNativeContentHeads({...contentHeadsRef.current});
+    setNativeProjections((currentProjections) => ({...currentProjections, [materialId]: nextProjection}));
+    const value = asRecord(nextProjection.value);
+    if (materialTaskFeedbackRef.current) {
+      const feedback: MaterialTaskFeedback = {
+        ...materialTaskFeedbackRef.current,
+        materialId,
+        sourceVersionId: typeof value?.source_version_id === 'string' ? value.source_version_id : materialTaskFeedbackRef.current.sourceVersionId,
+        parseVersionId: typeof value?.parse_version_id === 'string' ? value.parse_version_id : responseRevision,
+        message: successMessage,
+      };
+      materialTaskFeedbackRef.current = feedback;
+      setMaterialTaskFeedback(feedback);
+    }
+    setNativeNotice(successMessage + ' revision ' + responseRevision + '。');
+    return responseRevision;
+  }, []);
+
   const processNativeEventBatch = useCallback((batch: EventBatch) => {
     const scheduled = nativeEventQueue.current.enqueue(batch, async (nextBatch) => {
       const activeRuntime = nativeRuntimeRef.current;
@@ -248,7 +287,12 @@ export function App() {
         const payloadRecord = asRecord(event.payload);
         const isMaterialProgressEvent = event.event_type === 'material.page_ready' || event.event_type === 'material.parse_changed';
         const payloadMaterialId = typeof payloadRecord?.material_id === 'string' ? payloadRecord.material_id : null;
-        const scopedMaterialId = lessonRef.current?.material_scope.includes(event.entity_id) ? event.entity_id : null;
+        let scopedLesson = lessonRef.current;
+        if (isMaterialProgressEvent && lessonNeedsMaterialHydration(scopedLesson)) {
+          const hydration = await hydrateNativeLesson(activeRuntime.adapter, scopedLesson, activeRuntime.windowId, '资料事件前 lesson hydration');
+          scopedLesson = hydration.lesson;
+        }
+        const scopedMaterialId = scopedLesson?.material_scope.includes(event.entity_id) ? event.entity_id : null;
         const materialProjectionId = isMaterialProgressEvent ? payloadMaterialId ?? scopedMaterialId : null;
         const requestedProjectionRevision = isMaterialProgressEvent ? (typeof payloadRecord?.parse_version_id === 'string' ? payloadRecord.parse_version_id : null) : event.revision_id;
         const isViewEvent = event.event_type.startsWith('workspace.view_') || event.event_type.startsWith('view.');
@@ -267,6 +311,12 @@ export function App() {
             materialTaskFeedbackRef.current = feedback;
             setMaterialTaskFeedback(feedback);
             setNativeNotice(feedback.message);
+            if (feedback.status === 'completed') {
+              const hydration = await hydrateNativeLesson(activeRuntime.adapter, lessonRef.current, activeRuntime.windowId, '任务完成后 lesson hydration');
+              const materialId = hydration.lesson?.material_scope[0] ?? null;
+              if (materialId) await readMaterialHead(activeRuntime.adapter, materialId, activeRuntime.windowId, '任务完成后已按真实 material_scope 读取 material head');
+              else if (!hydration.error) setNativeNotice('任务已完成，但 lesson 仍没有宿主返回的 material_scope；不会猜测资料实体 ID。');
+            }
           }
         }
         if (!isNormalEntityEvent && !isKnownProjectionEvent) throw new Error(`未知 native event type：${event.event_type}；未 ACK，等待重试或重新 state.open`);
@@ -394,7 +444,7 @@ export function App() {
       }
     });
     return scheduled;
-  }, []);
+  }, [hydrateNativeLesson, readMaterialHead]);
 
   const handleEventBatch = useCallback((batch: EventBatch) => {
     if (!nativeRuntimeRef.current) {
@@ -432,8 +482,14 @@ export function App() {
 
     setBootPhase('focaus_bootstrap → native window identity');
     bootstrapNativeRuntime(handleEventBatch)
-      .then((nextRuntime) => {
+      .then(async (nextRuntime) => {
         stopEvents = nextRuntime.stopEvents;
+        if (!alive) {
+          nextRuntime.stopEvents();
+          return;
+        }
+        const library = extractLibraryFromSnapshot(nextRuntime.state.snapshot);
+        const lessonHydration = await hydrateNativeLesson(nextRuntime.adapter, library.lesson, nextRuntime.windowId, 'state.open 后 lesson hydration');
         if (!alive) {
           nextRuntime.stopEvents();
           return;
@@ -441,9 +497,8 @@ export function App() {
         nativeRuntimeRef.current = nextRuntime;
         setRuntime(nextRuntime);
         setEventSeq(nextRuntime.state.snapshot_seq);
-        const library = extractLibraryFromSnapshot(nextRuntime.state.snapshot);
         courseRef.current = library.course;
-        lessonRef.current = library.lesson;
+        lessonRef.current = lessonHydration.lesson;
         recordingRef.current = library.recording;
         const snapshotHeads = extractContentHeadsFromSnapshot(nextRuntime.state.snapshot);
         contentHeadsRef.current = snapshotHeads;
@@ -454,7 +509,7 @@ export function App() {
         setNativeViews(readyViews);
         setActiveNativeViewId(nextRuntime.readyView?.view_id ?? readyViews[0]?.view_id ?? null);
         setCourse(library.course);
-        setLesson(library.lesson);
+        setLesson(lessonHydration.lesson);
         setRecordingSession(library.recording);
         if (library.recording) setRecordingState(library.recording.state);
         const buffered = pendingEventBatches.current;
@@ -471,7 +526,7 @@ export function App() {
       alive = false;
       stopEvents?.();
     };
-  }, [fixtureAdapter, fixtureRequested, handleEventBatch, processNativeEventBatch]);
+  }, [fixtureAdapter, fixtureRequested, handleEventBatch, hydrateNativeLesson, processNativeEventBatch]);
 
   useEffect(() => {
     if (runtime?.mode !== 'native') return;
@@ -510,7 +565,7 @@ export function App() {
         setNativeProjections((current) => ({...current, [key]: nextProjection}));
       });
     }
-  }, [adapter, nativeProjections, nativeViews, runtime?.mode]);
+  }, [adapter, lesson?.revision_id, lesson?.material_scope.join(','), nativeProjections, nativeViews, runtime?.mode]);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -536,46 +591,16 @@ export function App() {
 
   const refreshNativeMaterial = useCallback(async () => {
     if (runtime?.mode !== 'native') return;
-    const materialId = lessonRef.current?.material_scope[0] ?? null;
+    const activeRuntime = nativeRuntimeRef.current;
+    if (!activeRuntime) return;
+    const hydration = await hydrateNativeLesson(activeRuntime.adapter, lessonRef.current, activeRuntime.windowId, '刷新前 lesson hydration');
+    const materialId = hydration.lesson?.material_scope[0] ?? null;
     if (!materialId) {
-      setNativeNotice('当前 lesson 尚未返回 material_scope；不会猜测资料实体 ID。');
+      if (!hydration.error) setNativeNotice('当前 lesson 尚未返回 material_scope；不会猜测资料实体 ID。');
       return;
     }
-    const token = projectionGate.current.begin(materialId, null);
-    setNativeNotice('正在读取宿主当前 material head；旧 projection 保持可见，直到新 revision 校验通过。');
-    const response = await adapter.invoke('content.get', {entity_id: materialId, revision_id: null, selector: null}, makeEnvelope('content.get'));
-    if (response.status === 'error' || !response.result) {
-      setNativeNotice('读取 material head 失败：' + (response.error?.message ?? response.error?.code ?? 'unknown error'));
-      return;
-    }
-    const responseRevision = nativeProjectionRevision(response.result, null);
-    if (!responseRevision || !projectionGate.current.accepts(materialId, token, responseRevision)) {
-      setNativeNotice('material head 没有返回可校验 revision；保留当前 projection。');
-      return;
-    }
-    const current = nativeProjections[materialId];
-    if (current?.revisionId === responseRevision) {
-      setNativeNotice('宿主返回的 material head 与当前 revision 相同；没有替换当前 projection。');
-      return;
-    }
-    const nextProjection = detectNativeProjection(response.result, materialId, responseRevision);
-    contentHeadsRef.current[materialId] = response.result;
-    setNativeContentHeads({...contentHeadsRef.current});
-    setNativeProjections((currentProjections) => ({...currentProjections, [materialId]: nextProjection}));
-    const value = asRecord(nextProjection.value);
-    if (materialTaskFeedbackRef.current) {
-      const feedback: MaterialTaskFeedback = {
-        ...materialTaskFeedbackRef.current,
-        materialId,
-        sourceVersionId: typeof value?.source_version_id === 'string' ? value.source_version_id : materialTaskFeedbackRef.current.sourceVersionId,
-        parseVersionId: typeof value?.parse_version_id === 'string' ? value.parse_version_id : responseRevision,
-        message: '已刷新宿主 material head；旧 revision 未覆盖新 revision。',
-      };
-      materialTaskFeedbackRef.current = feedback;
-      setMaterialTaskFeedback(feedback);
-    }
-    setNativeNotice('material head 已刷新为 revision ' + responseRevision + '；搜索 scope 需由宿主 search.refresh 重新确认。');
-  }, [adapter, nativeProjections, runtime?.mode]);
+    await readMaterialHead(activeRuntime.adapter, materialId, activeRuntime.windowId, '已刷新宿主 material head；旧 revision 未覆盖新 revision');
+  }, [hydrateNativeLesson, readMaterialHead, runtime?.mode]);
 
   const updateRecordingFixture = (nextState: RecordingState) => {
     setRecordingState(nextState);
