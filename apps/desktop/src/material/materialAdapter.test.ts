@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import type {MaterialImportAdapter} from './materialAdapter.ts';
+import {parseMaterialTaskError, type MaterialImportAdapter} from './materialAdapter.ts';
 
 describe('formal material import boundary', () => {
   it('models accepted picker/convert work as a task, not a completed projection', async () => {
@@ -12,5 +12,9 @@ describe('formal material import boundary', () => {
     expect(result.status).toBe('accepted');
     expect(result.taskId).toBe('task-1');
     expect(result.message).toContain('accepted');
+  });
+
+  it('preserves structured host failure fields for the task status panel', () => {
+    expect(parseMaterialTaskError({code: 'PARSE_FAILED', message: 'page 3 unavailable', scope: 'material.page', retryable: true})).toEqual({code: 'PARSE_FAILED', message: 'page 3 unavailable', scope: 'material.page', retryable: true});
   });
 });

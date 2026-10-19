@@ -27,6 +27,17 @@ describe('material projection state', () => {
     expect(states.some((state) => state.status === 'unsupported')).toBe(true);
   });
 
+  it('does not present another layer as primary and does not treat unknown projection as ready', () => {
+    const unknownMaterial: NativeProjection = {key: 'unknown-material', kind: 'material', revisionId: 'r-unknown', status: 'unknown', value: {reason: 'new host projection'} };
+    const states = buildMaterialLayerStates({projections: {material: partialMaterial}, views: [], activeView: null});
+    expect(states.find((state) => state.layer === 'primary')?.status).toBe('empty');
+    expect(states.find((state) => state.layer === 'primary')?.projection).toBeNull();
+    expect(states.find((state) => state.layer === 'material')?.status).toBe('partial');
+    expect(states.find((state) => state.layer === 'content_view')?.status).toBe('empty');
+    const unknownStates = buildMaterialLayerStates({projections: {material: unknownMaterial}, views: [], activeView: null});
+    expect(unknownStates.find((state) => state.layer === 'material')?.status).toBe('unknown');
+  });
+
   it('drops an old async material revision before it can overwrite the latest request', () => {
     const gate = new MaterialRevisionGate();
     const oldRequest = gate.begin('material-1', 'parse-1');

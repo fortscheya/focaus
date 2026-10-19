@@ -36,7 +36,8 @@ function objectIds(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap((entry) => {
     const item = record(entry);
-    return item && typeof item.object_id === 'string' ? [item.object_id] : [];
+    const refs = item && Array.isArray(item.source_refs) ? extractNativeSourceRefs(item.source_refs) : [];
+    return item && typeof item.object_id === 'string' && typeof item.revision_id === 'string' && item.status === 'complete' && refs.length ? [item.object_id] : [];
   });
 }
 
@@ -51,10 +52,26 @@ function textTargets(value: unknown): NativeTextPatchTarget[] {
     const revisionId = item && typeof item.revision_id === 'string' ? item.revision_id : null;
     const beforeHash = item && typeof item.content_hash === 'string' ? item.content_hash : null;
     const leaseEpoch = item && typeof item.lease_epoch === 'number' && Number.isInteger(item.lease_epoch) ? item.lease_epoch : null;
-    if (!item || !objectId || item.type !== 'text' || item.editability !== 'native' || !itemSelector || !revisionId || !beforeHash || leaseEpoch === null || !content) return [];
+    if (!item || !objectId || item.type !== 'text' || item.status !== 'complete' || item.editability !== 'native' || !itemSelector || !revisionId || !beforeHash || leaseEpoch === null || !content) return [];
     const text = Array.isArray(content.runs) ? content.runs.map((run) => record(run)?.text).filter((part): part is string => typeof part === 'string').join('') : '';
     return [{objectId, revisionId, beforeHash, selector: itemSelector, leaseEpoch, text}];
   });
+}
+
+export function extractNativePageSourceRefs(value: unknown, page: unknown): SourceRef[] {
+  const pageRecord = record(page);
+  const pageId = typeof pageRecord?.page_id === 'string' ? pageRecord.page_id : null;
+  if (!pageId) return [];
+  const material = record(value);
+  const objects = Array.isArray(material?.objects) ? material.objects : [];
+  const refs = [...extractNativeSourceRefs(page), ...objects.flatMap((object) => extractNativeSourceRefs(object))];
+  const unique = new Map<string, SourceRef>();
+  refs.forEach((source) => {
+    const selector = source.selector;
+    const hasBox = Array.isArray(selector.kind === 'material_region' ? selector.bbox : null) && selector.kind === 'material_region' && selector.bbox.length === 4 && selector.bbox.every((value) => typeof value === 'number' && Number.isFinite(value));
+    if (selector.kind === 'material_region' && selector.page_id === pageId && typeof selector.material_id === 'string' && typeof selector.source_version_id === 'string' && typeof selector.parse_version_id === 'string' && typeof selector.region_id === 'string' && selector.coordinate_space === 'rotated_page_normalized' && hasBox) unique.set(`${source.entity_id}:${source.revision_id}:${JSON.stringify(selector)}`, source);
+  });
+  return [...unique.values()];
 }
 
 function suggestions(value: unknown, fallbackRevision: string | null): Array<CorrectionSuggestion & {baseRevision: string}> {

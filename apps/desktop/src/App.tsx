@@ -22,7 +22,7 @@ import {
 import {SerialNativeEventQueue} from './app/nativeEventQueue.ts';
 import {classifyRecordingEvent} from './app/nativeRecordingEvents.ts';
 import {detectNativeProjection, nativeProjectionRevision, NativeProjectionGate, type NativeProjection} from './nativeContentProjection.ts';
-import type {MaterialTaskFeedback} from './material/materialAdapter.ts';
+import {parseMaterialTaskError, type MaterialTaskFeedback} from './material/materialAdapter.ts';
 import type {SearchResultView} from './search/searchIndex.ts';
 
 type Screen = 'home' | 'workspace';
@@ -136,6 +136,7 @@ function taskStatus(value: unknown): MaterialTaskFeedback['status'] | null {
   if (value === 'running' || value === 'paused' || value === 'interrupted') return 'running';
   if (value === 'succeeded') return 'completed';
   if (value === 'failed' || value === 'cancelled' || value === 'superseded') return 'failed';
+  if (value === 'error' || value === 'errored') return 'error';
   return null;
 }
 
@@ -147,13 +148,15 @@ function materialTaskFeedbackFromEvent(event: EventBatch['events'][number], curr
   if (kind !== 'material_convert' && kind !== 'material_reparse' && current?.taskId !== taskId) return null;
   const status = taskStatus(task?.state ?? payload?.state);
   if (!status) return null;
+  const error = parseMaterialTaskError(task?.error ?? payload?.error ?? (status === 'failed' || status === 'error' ? task : null));
   return {
     status,
     taskId,
     materialId: typeof payload?.material_id === 'string' ? payload.material_id : current?.materialId ?? null,
     sourceVersionId: typeof payload?.source_version_id === 'string' ? payload.source_version_id : current?.sourceVersionId ?? null,
     parseVersionId: typeof payload?.parse_version_id === 'string' ? payload.parse_version_id : current?.parseVersionId ?? null,
-    message: status === 'completed' ? '宿主任务已完成；仍以新的 content head/projection revision 为准。' : status === 'failed' ? '宿主资料任务失败；保留旧 projection，不以失败结果替换当前内容。' : status === 'running' ? '宿主资料任务运行中；已接受不等于完成。' : '宿主已接受资料任务，等待 page_ready/parse_changed 和最终 task 状态。',
+    error,
+    message: status === 'completed' ? '宿主任务已完成；仍以新的 content head/projection revision 为准。' : status === 'failed' ? '宿主资料任务失败；保留旧 projection，不以失败结果替换当前内容。' : status === 'error' ? '资料任务返回错误；保留已有 projection，不把错误当作完成。' : status === 'running' ? '宿主资料任务运行中；已接受不等于完成。' : '宿主已接受资料任务，等待 page_ready/parse_changed 和最终 task 状态。',
   };
 }
 
@@ -227,6 +230,7 @@ export function App() {
         sourceVersionId: result.sourceVersionId ?? null,
         parseVersionId: result.parseVersionId ?? null,
         message: result.message,
+        error: result.error ?? null,
       });
     }
   }) : null, [runtime?.mode]);

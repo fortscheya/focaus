@@ -1,10 +1,10 @@
 import {useEffect, useMemo, useState} from 'react';
 import {Button} from '@heroui/react';
-import type {ContentView, HostAdapter} from '@focaus/contracts';
+import type {ContentView, HostAdapter, SourceRef} from '@focaus/contracts';
 import {makeEnvelope} from '../app/hostAdapter.ts';
 import type {NativeProjection} from '../nativeContentProjection.ts';
 import {StatusBadge} from './StatusBadge.tsx';
-import {extractNativeProjectionActions, type NativeProjectionActions, type NativeTextPatchTarget} from './nativeProjectionActions.ts';
+import {extractNativePageSourceRefs, extractNativeProjectionActions, type NativeProjectionActions, type NativeTextPatchTarget} from './nativeProjectionActions.ts';
 import {NativeVisualization2D} from '../visualizations/NativeVisualization2D.tsx';
 
 function objectRecord(value: unknown): Record<string, unknown> | null {
@@ -55,8 +55,10 @@ function ObjectPreview({object, adapter, view}: {object: unknown; adapter?: Host
 }
 
 function ProjectionState({projection}: {projection: NativeProjection}) {
-  if (projection.status === 'unsupported') return <div className="native-projection-empty"><StatusBadge tone="danger">unsupported</StatusBadge><p>宿主返回了不支持的内容能力；原始数据仍保留，可等待能力协商或静态回退。</p></div>;
-  if (projection.status === 'failed') return <div className="native-projection-empty"><StatusBadge tone="danger">failed</StatusBadge><p>该内容投影失败；不会用 fixture 或旧 revision 顶替。</p></div>;
+  const value = objectRecord(projection.value);
+  const reason = value?.reason ?? value?.unsupported_reason ?? value?.error ?? value?.completion_reason;
+  if (projection.status === 'unsupported') return <div className="native-projection-empty"><StatusBadge tone="danger">unsupported</StatusBadge><p>{typeof reason === 'string' ? reason : '宿主返回了不支持的内容能力；原始数据仍保留，可等待能力协商或静态回退。'}</p></div>;
+  if (projection.status === 'failed') return <div className="native-projection-empty"><StatusBadge tone="danger">failed</StatusBadge><p>{typeof reason === 'string' ? reason : '该内容投影失败；不会用 fixture 或旧 revision 顶替。'}</p></div>;
   if (projection.status === 'partial') return <div className="native-projection-banner"><StatusBadge tone="warning">partial</StatusBadge><span>内容只覆盖宿主已完成的页/区域；未处理范围仍明确保留。</span></div>;
   return null;
 }
@@ -65,8 +67,42 @@ function responseError(response: {status: string; error?: {message?: string; cod
   return response.status === 'error' ? response.error?.message ?? response.error?.code ?? '宿主命令失败。' : null;
 }
 
+function safeErrorLabel(value: unknown): string | null {
+  const item = objectRecord(value);
+  if (!item) return typeof value === 'string' ? value : null;
+  const code = typeof item.code === 'string' ? item.code : null;
+  const message = typeof item.message === 'string' ? item.message : null;
+  const scope = typeof item.scope === 'string' ? item.scope : null;
+  const retryable = typeof item.retryable === 'boolean' ? item.retryable : null;
+  const metadata = [scope ? 'scope=' + scope : null, retryable === null ? null : 'retryable=' + retryable].filter((entry): entry is string => Boolean(entry)).join(', ');
+  if (!code && !message && !metadata) return null;
+  return [code, message].filter((entry): entry is string => Boolean(entry)).join(': ') + (metadata ? ` (${metadata})` : '');
+}
+
+function pageTone(status: unknown): 'neutral' | 'success' | 'warning' | 'danger' {
+  if (status === 'complete') return 'success';
+  if (status === 'failed' || status === 'unsupported') return 'danger';
+  if (status === 'partial' || status === 'basic_ready') return 'warning';
+  return 'neutral';
+}
+
 function CommandFeedback({message}: {message: string}) {
   return message ? <p className="native-command-feedback" role="status">{message}</p> : null;
+}
+
+function PageSourceAction({sourceRefs, adapter, view}: {sourceRefs: SourceRef[]; adapter?: HostAdapter; view: ContentView | null}) {
+  const [working, setWorking] = useState(false);
+  const [message, setMessage] = useState('');
+  const source = sourceRefs[0] ?? null;
+  const openOriginalPage = async () => {
+    if (!source || !adapter) return;
+    setWorking(true); setMessage('');
+    const response = await adapter.invoke('content.get', {entity_id: source.entity_id, revision_id: source.revision_id, selector: source.selector}, makeEnvelope('content.get', view?.host_window_id, {[source.entity_id]: source.revision_id}));
+    setWorking(false);
+    const error = responseError(response);
+    setMessage(error ? `原页读取失败：${error}` : response.status === 'accepted' ? `已提交原页读取，等待宿主返回 ${source.entity_id} · ${source.revision_id}。` : `已请求原页 ${source.entity_id} · ${source.revision_id}。`);
+  };
+  return <div className="native-page-source-action"><Button size="sm" variant="ghost" isDisabled={!source || !adapter || working} isPending={working} onPress={() => void openOriginalPage()}>查看原页{sourceRefs.length > 1 ? `（${sourceRefs.length}）` : ''}</Button>{source ? <span>{source.entity_id} · {source.revision_id}</span> : <span>原页待真实 material_region SourceRef</span>}{message ? <p className="native-command-feedback" role="status">{message}</p> : null}</div>;
 }
 
 function SourceActions({actions, adapter, view, projection}: {actions: NativeProjectionActions; adapter: HostAdapter; view: ContentView | null; projection: NativeProjection}) {
@@ -74,10 +110,10 @@ function SourceActions({actions, adapter, view, projection}: {actions: NativePro
   const [working, setWorking] = useState<string | null>(null);
   const [selectionWorking, setSelectionWorking] = useState(false);
   const canAct = projection.status === 'complete';
-  const canResolveSource = projection.status !== 'failed' && projection.status !== 'unsupported';
   const sourceRefs = actions.sourceRefs.slice(0, 3);
+  const canResolveSource = sourceRefs.length > 0;
   const sourceLabel = actions.sourceRefs.length > 3 ? `来源（${actions.sourceRefs.length}）` : '查看来源';
-  const addSelectionReason = !actions.noteId ? '当前 projection 没有合法 note_id，请先打开真实笔记。' : !actions.sourceRefs.length || !actions.objectIds.length ? '需要 projection 同时返回 SourceRef 和 object_id。' : projection.status !== 'complete' ? `当前 projection 为 ${projection.status}。` : '';
+  const addSelectionReason = !actions.noteId ? '当前 projection 没有合法 note_id，请先打开真实笔记。' : !actions.noteRevisionId ? '当前 projection 缺少 note revision，不能安全提交写入。' : !actions.sourceRefs.length || !actions.objectIds.length ? '需要 projection 同时返回可用 SourceRef 和 complete object_id。' : projection.status !== 'complete' ? `当前 projection 为 ${projection.status}，加入笔记待完整 revision。` : '';
 
   const resolveSource = async (index: number) => {
     const source = sourceRefs[index];
@@ -90,7 +126,7 @@ function SourceActions({actions, adapter, view, projection}: {actions: NativePro
   };
 
   const addSelection = async () => {
-    if (!actions.noteId || !actions.sourceRefs.length || !actions.objectIds.length || !canAct) return;
+    if (!actions.noteId || !actions.noteRevisionId || !actions.sourceRefs.length || !actions.objectIds.length || !canAct) return;
     setSelectionWorking(true); setMessage('');
     const expectedRevisions = actions.noteRevisionId ? {[actions.noteId]: actions.noteRevisionId} : {};
     const response = await adapter.invoke('note.add_selection', {note_id: actions.noteId, sources: actions.sourceRefs, object_ids: actions.objectIds}, makeEnvelope('note.add_selection', view?.host_window_id, expectedRevisions));
@@ -99,7 +135,7 @@ function SourceActions({actions, adapter, view, projection}: {actions: NativePro
     setMessage(error ? `加入笔记失败：${error}` : `已向宿主提交 ${actions.objectIds.length} 个真实对象，等待笔记 projection 更新。`);
   };
 
-  return <div className="native-projection-actions" aria-label="真实 projection 操作"><div className="native-projection-action-row"><span className="native-action-label">来源与取材</span>{sourceRefs.map((source, index) => <Button key={`${source.entity_id}:${source.revision_id}`} size="sm" variant="ghost" isDisabled={!canResolveSource || working !== null} isPending={working === `${source.entity_id}:${source.revision_id}`} onPress={() => void resolveSource(index)}>{sourceRefs.length > 1 ? `${sourceLabel} ${index + 1}` : sourceLabel}</Button>)}<Button size="sm" variant="secondary" isDisabled={!actions.noteId || !actions.sourceRefs.length || !actions.objectIds.length || !canAct} isPending={selectionWorking} onPress={() => void addSelection()}>加入笔记{actions.objectIds.length ? '（' + actions.objectIds.length + '）' : ''}</Button>{!sourceRefs.length ? <span className="native-action-disabled">当前 projection 没有合法 SourceRef</span> : null}{!actions.noteId && actions.objectIds.length ? <span className="native-action-disabled">缺少 note_id</span> : null}{addSelectionReason && actions.noteId && actions.objectIds.length ? <span className="native-action-disabled">{addSelectionReason}</span> : null}</div><CommandFeedback message={message} /></div>;
+  return <div className="native-projection-actions" aria-label="真实 projection 操作"><div className="native-projection-action-row"><span className="native-action-label">来源与取材</span>{sourceRefs.map((source, index) => <Button key={`${source.entity_id}:${source.revision_id}`} size="sm" variant="ghost" isDisabled={!canResolveSource || working !== null} isPending={working === `${source.entity_id}:${source.revision_id}`} onPress={() => void resolveSource(index)}>{sourceRefs.length > 1 ? `${sourceLabel} ${index + 1}` : sourceLabel}</Button>)}<Button size="sm" variant="secondary" isDisabled={!actions.noteId || !actions.noteRevisionId || !actions.sourceRefs.length || !actions.objectIds.length || !canAct} isPending={selectionWorking} onPress={() => void addSelection()}>加入笔记{actions.objectIds.length ? '（' + actions.objectIds.length + '）' : ''}</Button>{!sourceRefs.length ? <span className="native-action-disabled">当前 projection 没有合法 SourceRef</span> : null}{!actions.noteId && actions.objectIds.length ? <span className="native-action-disabled">缺少 note_id</span> : null}{actions.noteId && !actions.noteRevisionId && actions.objectIds.length ? <span className="native-action-disabled">缺少 note revision</span> : null}{addSelectionReason && actions.noteId && actions.noteRevisionId && actions.objectIds.length ? <span className="native-action-disabled">{addSelectionReason}</span> : null}</div><CommandFeedback message={message} /></div>;
 }
 
 function TextPatchEditor({target, adapter, view}: {target: NativeTextPatchTarget; adapter: HostAdapter; view: ContentView | null}) {
@@ -141,8 +177,19 @@ function CorrectionEditor({actions, adapter, view, projection}: {actions: Native
 function ProjectionActions({projection, adapter, view}: {projection: NativeProjection; adapter?: HostAdapter; view: ContentView | null}) {
   const actions = useMemo(() => extractNativeProjectionActions(projection), [projection]);
   if (!adapter) return null;
-  const canAddToNote = projection.status === 'complete' && Boolean(actions.noteId && actions.sourceRefs.length && actions.objectIds.length);
-  return <><div className="native-projection-capabilities" aria-label="真实 projection 能力"><StatusBadge tone={actions.sourceRefs.length ? 'success' : 'warning'}>来源 {actions.sourceRefs.length}</StatusBadge><StatusBadge tone={actions.objectIds.length ? 'accent' : 'neutral'}>对象 {actions.objectIds.length}</StatusBadge><StatusBadge tone={canAddToNote ? 'success' : 'neutral'}>{canAddToNote ? '可加入笔记' : '加入笔记待宿主字段'}</StatusBadge><StatusBadge tone={actions.textTargets.length ? 'success' : 'neutral'}>{actions.textTargets.length ? '可编辑文本 ' + actions.textTargets.length : '只读或无编辑 lease'}</StatusBadge></div><SourceActions actions={actions} adapter={adapter} view={view} projection={projection} />{actions.textTargets.map((target) => <TextPatchEditor key={target.objectId} target={target} adapter={adapter} view={view} />)}{projection.kind === 'secondary' ? <CorrectionEditor actions={actions} adapter={adapter} view={view} projection={projection} /> : null}</>;
+  const canAddToNote = projection.status === 'complete' && Boolean(actions.noteId && actions.noteRevisionId && actions.sourceRefs.length && actions.objectIds.length);
+  const editableTargets = projection.status === 'complete' ? actions.textTargets : [];
+  const editLabel = actions.textTargets.length && projection.status !== 'complete' ? `编辑待完整 ${projection.status} revision` : actions.textTargets.length ? '可编辑文本 ' + actions.textTargets.length : '只读或无编辑 lease';
+  return <><div className="native-projection-capabilities" aria-label="真实 projection 能力"><StatusBadge tone={actions.sourceRefs.length ? 'success' : 'warning'}>来源 {actions.sourceRefs.length}</StatusBadge><StatusBadge tone={actions.objectIds.length ? 'accent' : 'neutral'}>可取对象 {actions.objectIds.length}</StatusBadge><StatusBadge tone={canAddToNote ? 'success' : 'neutral'}>{canAddToNote ? '可加入笔记' : '加入笔记待真实字段'}</StatusBadge><StatusBadge tone={editableTargets.length ? 'success' : actions.textTargets.length ? 'warning' : 'neutral'}>{editLabel}</StatusBadge></div><SourceActions actions={actions} adapter={adapter} view={view} projection={projection} />{editableTargets.map((target) => <TextPatchEditor key={target.objectId} target={target} adapter={adapter} view={view} />)}{projection.kind === 'secondary' && projection.status === 'complete' ? <CorrectionEditor actions={actions} adapter={adapter} view={view} projection={projection} /> : null}</>;
+}
+
+function MaterialPageRow({page, material, adapter, view}: {page: unknown; material: Record<string, unknown>; adapter?: HostAdapter; view: ContentView | null}) {
+  const item = objectRecord(page);
+  const pageId = typeof item?.page_id === 'string' ? item.page_id : null;
+  const status = typeof item?.status === 'string' ? item.status : 'unknown';
+  const errors = Array.isArray(item?.errors) ? item.errors.map(safeErrorLabel).filter((error): error is string => Boolean(error)) : [];
+  const sourceRefs = extractNativePageSourceRefs(material, item);
+  return <div className={`native-page-row native-page-row-${status}`}><div className="native-page-row-heading"><strong>{String(item?.display_label ?? '未命名页')}</strong><StatusBadge tone={pageTone(status)}>{status}</StatusBadge></div><div className="native-page-row-meta"><span>{pageId ? 'page ' + pageId : '缺少 page_id'}</span>{errors[0] ? <span className="native-page-error">{errors[0]}</span> : <span>{sourceRefs.length ? `已绑定 ${sourceRefs.length} 个原页 SourceRef` : '原页 SourceRef 未返回'}</span>}</div><PageSourceAction sourceRefs={sourceRefs} adapter={adapter} view={view} /></div>;
 }
 
 export function NativeContentRenderer({projection, adapter, view = null}: {projection: NativeProjection | null; adapter?: HostAdapter; view?: ContentView | null}) {
@@ -155,7 +202,7 @@ export function NativeContentRenderer({projection, adapter, view = null}: {proje
     const pages = Array.isArray(value?.pages) ? value.pages : [];
     const objects = Array.isArray(value?.objects) ? value.objects : [];
     const searchCoverage = objectRecord(value?.search_coverage);
-    return <div className="native-projection-body">{projectionState}{actions}<div className="native-material-meta"><span>format focaus.material/2.0.0</span><span>source {String(value?.source_version_id ?? 'unknown')}</span><span>parse {String(value?.parse_version_id ?? projection.revisionId ?? 'unknown')}</span><span>completion {String(value?.completion ?? projection.status)}</span><span>search {String(searchCoverage?.state ?? 'unknown')}</span><span>{pages.length} 页 · {objects.length} 个对象</span></div><div className="native-pages-list">{pages.slice(0, 8).map((page, index) => {const item = objectRecord(page); const status = typeof item?.status === 'string' ? item.status : 'unknown'; return <div key={String(item?.page_id ?? index)} className="native-page-row"><strong>{String(item?.display_label ?? `第 ${index + 1} 页`)}</strong><StatusBadge tone={status === 'complete' ? 'success' : status === 'unsupported' || status === 'failed' ? 'danger' : 'warning'}>{status}</StatusBadge></div>;})}</div><div className="native-object-list">{objects.slice(0, 12).map((object, index) => <ObjectPreview key={String(objectRecord(object)?.object_id ?? index)} object={object} adapter={adapter} view={view} />)}</div></div>;
+    return <div className="native-projection-body">{projectionState}{actions}<div className="native-material-meta"><span>format focaus.material/2.0.0</span><span>source {String(value?.source_version_id ?? 'unknown')}</span><span>parse {String(value?.parse_version_id ?? projection.revisionId ?? 'unknown')}</span><span>completion {String(value?.completion ?? projection.status)}</span><span>search {String(searchCoverage?.state ?? 'unknown')}</span><span>{pages.length} 页 · {objects.length} 个对象</span></div><div className="native-pages-list">{pages.slice(0, 8).map((page, index) => <MaterialPageRow key={String(objectRecord(page)?.page_id ?? index)} page={page} material={value ?? {}} adapter={adapter} view={view} />)}</div><div className="native-object-list">{objects.slice(0, 12).map((object, index) => <ObjectPreview key={String(objectRecord(object)?.object_id ?? index)} object={object} adapter={adapter} view={view} />)}</div></div>;
   }
   if (projection.kind === 'note') {
     const objects = Array.isArray(value?.objects) ? value.objects : [];

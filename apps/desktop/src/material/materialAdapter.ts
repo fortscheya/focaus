@@ -8,6 +8,30 @@ export interface MaterialImportRequest {
   pages: number[];
 }
 
+export interface MaterialTaskError {
+  code: string | null;
+  message: string;
+  scope: string | null;
+  retryable: boolean | null;
+}
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' ? value as Record<string, unknown> : null;
+}
+
+/** Keep host SafeError fields available to the UI without importing host-specific code here. */
+export function parseMaterialTaskError(value: unknown): MaterialTaskError | null {
+  const outer = record(value);
+  const nested = outer && 'error' in outer ? outer.error : value;
+  const item = record(nested);
+  const code = typeof item?.code === 'string' ? item.code : typeof item?.error_code === 'string' ? item.error_code : null;
+  const message = typeof item?.message === 'string' ? item.message : typeof item?.error_message === 'string' ? item.error_message : typeof nested === 'string' ? nested : value instanceof Error ? value.message : null;
+  const scope = typeof item?.scope === 'string' ? item.scope : null;
+  const retryable = typeof item?.retryable === 'boolean' ? item.retryable : null;
+  if (!code && !message && !scope && retryable === null) return null;
+  return {code, message: message ?? '宿主资料任务失败。', scope, retryable};
+}
+
 export interface MaterialImportResult {
   status: 'accepted' | 'error';
   taskId?: string;
@@ -15,6 +39,7 @@ export interface MaterialImportResult {
   sourceVersionId?: string;
   parseVersionId?: string;
   message: string;
+  error?: MaterialTaskError | null;
 }
 
 export interface MaterialTaskFeedback {
@@ -24,6 +49,7 @@ export interface MaterialTaskFeedback {
   sourceVersionId: string | null;
   parseVersionId: string | null;
   message: string;
+  error?: MaterialTaskError | null;
 }
 
 /**

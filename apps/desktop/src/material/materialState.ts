@@ -1,8 +1,8 @@
 import type {ContentView} from '@focaus/contracts';
 import type {NativeProjection} from '../nativeContentProjection.ts';
 
-export type MaterialLayer = 'original' | 'primary' | 'raw' | 'secondary' | 'material' | 'content_view';
-export type MaterialLayerStatus = 'empty' | 'ready' | 'partial' | 'unsupported' | 'failed';
+export type MaterialLayer = 'original' | 'primary' | 'raw' | 'secondary' | 'material' | 'content_view' | 'unsupported';
+export type MaterialLayerStatus = 'empty' | 'ready' | 'partial' | 'unsupported' | 'failed' | 'unknown';
 
 export interface MaterialLayerState {
   layer: MaterialLayer;
@@ -29,6 +29,7 @@ function layerStatus(projection: NativeProjection | null): MaterialLayerStatus {
   if (projection.status === 'unsupported' || projection.kind === 'unsupported') return 'unsupported';
   if (projection.status === 'failed') return 'failed';
   if (projection.status === 'partial') return 'partial';
+  if (projection.status === 'unknown') return 'unknown';
   return 'ready';
 }
 
@@ -36,7 +37,7 @@ function projectionReason(projection: NativeProjection | null): string | null {
   if (!projection) return null;
   const record = objectRecord(projection.value);
   const reason = record?.reason ?? record?.unsupported_reason ?? record?.error ?? record?.completion_reason;
-  return typeof reason === 'string' ? reason : projection.status === 'partial' ? '宿主尚未完成全部请求页/区域。' : projection.status === 'unsupported' ? '宿主能力协商未支持该内容。' : projection.status === 'failed' ? '宿主投影失败。' : null;
+  return typeof reason === 'string' ? reason : projection.status === 'partial' ? '宿主尚未完成全部请求页/区域。' : projection.status === 'unsupported' ? '宿主能力协商未支持该内容。' : projection.status === 'failed' ? '宿主投影失败。' : projection.status === 'unknown' ? '宿主返回了未识别 projection 状态；不会按 ready 处理。' : null;
 }
 
 function stateFor(layer: MaterialLayer, projection: NativeProjection | null, sourceVersionId: string | null, parseVersionId: string | null): MaterialLayerState {
@@ -48,7 +49,7 @@ function stateFor(layer: MaterialLayer, projection: NativeProjection | null, sou
     sourceVersionId,
     parseVersionId,
     sourceRefCount: sourceRefCount(value),
-    reason: projectionReason(projection),
+    reason: projection ? projectionReason(projection) : layer === 'original' || layer === 'primary' ? '宿主尚未返回该层 projection；不会用其他层顶替。' : null,
     projection,
   };
 }
@@ -63,8 +64,7 @@ export function buildMaterialLayerStates({
   activeView: ContentView | null;
 }): MaterialLayerState[] {
   const materialProjection = Object.values(projections).find((projection) => projection.kind === 'material') ?? null;
-  const noteProjection = Object.values(projections).find((projection) => projection.kind === 'note') ?? null;
-  const unsupportedProjection = Object.values(projections).find((projection) => projection.kind === 'unsupported' || projection.status === 'unsupported') ?? null;
+  const unsupportedProjection = Object.values(projections).find((projection) => projection.kind === 'unsupported') ?? null;
   const rawProjection = Object.values(projections).find((projection) => projection.kind === 'raw') ?? null;
   const secondaryProjection = Object.values(projections).find((projection) => projection.kind === 'secondary') ?? null;
   const materialValue = objectRecord(materialProjection?.value);
@@ -79,14 +79,15 @@ export function buildMaterialLayerStates({
     value: activeView ?? views[0],
   } : null;
 
-  return [
-    stateFor('original', materialProjection, sourceVersionId, null),
-    stateFor('primary', noteProjection ?? unsupportedProjection ?? materialProjection, sourceVersionId, parseVersionId),
+  const states = [
+    stateFor('original', null, null, null),
+    stateFor('primary', null, null, null),
     stateFor('raw', rawProjection, null, rawProjection?.revisionId ?? null),
     stateFor('secondary', secondaryProjection, null, secondaryProjection?.revisionId ?? null),
     stateFor('material', materialProjection, sourceVersionId, parseVersionId),
     stateFor('content_view', contentViewProjection, sourceVersionId, activeView?.view_revision ?? null),
   ];
+  return unsupportedProjection ? [...states, stateFor('unsupported', unsupportedProjection, null, unsupportedProjection.revisionId)] : states;
 }
 
 export class MaterialRevisionGate {

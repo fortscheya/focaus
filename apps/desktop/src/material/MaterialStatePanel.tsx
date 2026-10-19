@@ -13,11 +13,12 @@ const layerLabels: Record<MaterialLayerState['layer'], string> = {
   secondary: '二次转写',
   material: 'material 结构化资料',
   content_view: 'content_view',
+  unsupported: '宿主能力状态',
 };
 
 function toneFor(status: MaterialLayerState['status']): 'neutral' | 'success' | 'warning' | 'danger' | 'accent' {
   if (status === 'ready') return 'success';
-  if (status === 'partial') return 'warning';
+  if (status === 'partial' || status === 'unknown') return 'warning';
   if (status === 'unsupported' || status === 'failed') return 'danger';
   return 'neutral';
 }
@@ -27,6 +28,7 @@ function statusLabel(status: MaterialLayerState['status']): string {
   if (status === 'partial') return 'partial';
   if (status === 'unsupported') return 'unsupported';
   if (status === 'failed') return 'failed';
+  if (status === 'unknown') return 'unknown';
   return 'empty';
 }
 
@@ -35,6 +37,26 @@ function taskTone(status: MaterialTaskFeedback['status']): 'neutral' | 'success'
   if (status === 'failed' || status === 'error') return 'danger';
   if (status === 'partial' || status === 'running' || status === 'accepted') return 'warning';
   return 'neutral';
+}
+
+function taskLabel(status: MaterialTaskFeedback['status']): string {
+  if (status === 'accepted') return '已受理';
+  if (status === 'running') return '处理中';
+  if (status === 'partial') return '部分已到达';
+  if (status === 'completed') return '任务完成';
+  if (status === 'failed') return '任务失败';
+  if (status === 'error') return '导入错误';
+  return '未开始';
+}
+
+function taskDescription(status: MaterialTaskFeedback['status']): string {
+  if (status === 'accepted') return '宿主已创建资料任务，尚未产生完整 projection。';
+  if (status === 'running') return '宿主正在处理资料；已受理不等于任务完成。';
+  if (status === 'partial') return '宿主已发布部分页或区域；完整性仍以新的 content head 与 revision 为准。';
+  if (status === 'completed') return '任务已进入终态；内容是否完整仍由当前 material projection 单独确认。';
+  if (status === 'failed') return '宿主任务失败；已有 projection 保留，失败结果不会替换它。';
+  if (status === 'error') return '导入请求返回错误；前端不会把错误状态当作已完成资料。';
+  return '';
 }
 
 export function MaterialStatePanel({
@@ -57,17 +79,17 @@ export function MaterialStatePanel({
   fixture?: boolean;
 }) {
   const [purpose, setPurpose] = useState<MaterialPurpose>('courseware');
-  const [importState, setImportState] = useState<MaterialTaskFeedback>({status: 'idle', taskId: null, materialId: null, sourceVersionId: null, parseVersionId: null, message: ''});
+  const [importState, setImportState] = useState<MaterialTaskFeedback>({status: 'idle', taskId: null, materialId: null, sourceVersionId: null, parseVersionId: null, message: '', error: null});
   const states = buildMaterialLayerStates({projections, views, activeView});
   const hasLesson = Boolean(lessonId);
   const feedback = taskFeedback ?? importState;
 
   const requestImport = async () => {
     if (!lessonId || !importAdapter) {
-      setImportState({status: 'error', taskId: null, materialId: null, sourceVersionId: null, parseVersionId: null, message: '等待宿主文件选择入口；前端不接收或猜测文件路径。'});
+      setImportState({status: 'error', taskId: null, materialId: null, sourceVersionId: null, parseVersionId: null, message: '等待宿主文件选择入口；前端不接收或猜测文件路径。', error: null});
       return;
     }
-    setImportState({status: 'running', taskId: null, materialId: null, sourceVersionId: null, parseVersionId: null, message: '正在请求宿主文件选择…'});
+    setImportState({status: 'running', taskId: null, materialId: null, sourceVersionId: null, parseVersionId: null, message: '正在请求宿主文件选择…', error: null});
     const result = await importAdapter.requestMaterialImport({lessonId, purpose, pages: []});
     setImportState({
       status: result.status === 'accepted' ? 'accepted' : 'error',
@@ -76,6 +98,7 @@ export function MaterialStatePanel({
       sourceVersionId: result.sourceVersionId ?? null,
       parseVersionId: result.parseVersionId ?? null,
       message: result.message,
+      error: result.error ?? null,
     });
   };
 
@@ -85,19 +108,14 @@ export function MaterialStatePanel({
         <div><p className="eyebrow">资料导入 · 三层内容边界</p><h2 id="material-state-title">材料与内容状态</h2></div>
         <div className="material-state-heading-actions">
           {fixture ? <StatusBadge tone="warning">fixture · 只读演示</StatusBadge> : <StatusBadge tone="success">native · content.get</StatusBadge>}
-          {feedback.status !== 'idle' ? <StatusBadge tone={taskTone(feedback.status)}>{feedback.status}</StatusBadge> : null}
+          {feedback.status !== 'idle' ? <StatusBadge tone={taskTone(feedback.status)}>{taskLabel(feedback.status)}</StatusBadge> : null}
           <select className="native-select" aria-label="资料用途" value={purpose} onChange={(event) => setPurpose(event.target.value as MaterialPurpose)}><option value="courseware">课件</option><option value="textbook">教材</option><option value="reference">参考资料</option></select>
-          <Button size="sm" onPress={() => void requestImport()} isPending={importState.status === 'running'} isDisabled={!hasLesson || fixture || importState.status === 'accepted' || importState.status === 'running'}>{fixture ? 'fixture 不导入' : '从宿主选择文件'}</Button>
+          <Button size="sm" onPress={() => void requestImport()} isPending={feedback.status === 'running'} isDisabled={!hasLesson || fixture || feedback.status === 'accepted' || feedback.status === 'running'}>{fixture ? 'fixture 不导入' : '从宿主选择文件'}</Button>
           {onRefresh ? <Button size="sm" variant="ghost" onPress={() => void onRefresh()}>刷新宿主状态</Button> : null}
         </div>
       </div>
       <div className="material-import-boundary"><span className="material-import-lock" aria-hidden="true">▣</span><span>导入只传 lesson、用途和页范围给宿主 adapter；文件路径、授权和托管 source handle 由宿主控制。</span><span className="fixture-label">{importAdapter ? `adapter · ${importAdapter.mode}` : 'adapter · 未接线'}</span></div>
-      {(() => {
-        const feedback = taskFeedback ?? importState;
-        if (!feedback.message) return null;
-        const error = feedback.status === 'error' || feedback.status === 'failed';
-        return <div className={error ? 'error-notice' : feedback.status === 'partial' ? 'warning-notice' : 'inline-notice'} role="status">{feedback.message}{feedback.taskId ? ' · task ' + feedback.taskId : ''}</div>;
-      })()}
+      {feedback.status !== 'idle' ? <div className={`material-task-summary material-task-summary-${feedback.status}`} role="status"><div className="material-task-summary-heading"><div><span className="eyebrow">宿主资料任务</span><strong>{taskLabel(feedback.status)}</strong></div><StatusBadge tone={taskTone(feedback.status)}>{feedback.status}</StatusBadge></div><p>{taskDescription(feedback.status)}</p>{feedback.message ? <p className="material-task-message">{feedback.message}</p> : null}<dl className="material-task-details">{feedback.taskId ? <div><dt>task</dt><dd>{feedback.taskId}</dd></div> : null}{feedback.materialId ? <div><dt>material</dt><dd>{feedback.materialId}</dd></div> : null}{feedback.sourceVersionId ? <div><dt>source</dt><dd>{feedback.sourceVersionId}</dd></div> : null}{feedback.parseVersionId ? <div><dt>parse</dt><dd>{feedback.parseVersionId}</dd></div> : null}</dl>{feedback.error ? <div className="material-task-error"><strong>{feedback.error.code ?? 'HOST_ERROR'}</strong><span>{feedback.error.message}</span><small>{[feedback.error.scope ? 'scope=' + feedback.error.scope : null, feedback.error.retryable === null ? null : 'retryable=' + feedback.error.retryable].filter((value): value is string => Boolean(value)).join(' · ')}</small></div> : null}</div> : null}
       <div className="material-layer-grid">
         {states.map((state) => (
           <Card key={state.layer} className="material-layer-card" variant="secondary">

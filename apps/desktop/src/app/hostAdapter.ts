@@ -14,7 +14,7 @@ import type {
   EvaluationResult,
   VisualizationEvaluateInput,
 } from '@focaus/contracts';
-import type {MaterialImportAdapter, MaterialImportRequest, MaterialImportResult} from '../material/materialAdapter.ts';
+import {parseMaterialTaskError, type MaterialImportAdapter, type MaterialImportRequest, type MaterialImportResult} from '../material/materialAdapter.ts';
 
 export const CONTRACT_VERSION = '2.0.0' as const;
 export const MATERIAL_FORMAT = 'focaus.material/2.0.0' as const;
@@ -55,14 +55,12 @@ export function makeEnvelope(name: CommandName, windowId = activeWindowId, expec
 
 /** Formats Tauri SafeError rejections without collapsing structured data to [object Object]. */
 export function formatNativeError(error: unknown): string {
-  const object = error && typeof error === 'object' ? error as Record<string, unknown> : null;
-  const message = object && typeof object.message === 'string' ? object.message : error instanceof Error ? error.message : typeof error === 'string' ? error : null;
-  const code = object && typeof object.code === 'string' ? object.code : null;
-  const scope = object && typeof object.scope === 'string' ? object.scope : null;
-  const retryable = object && typeof object.retryable === 'boolean' ? object.retryable : null;
-  const head = [code, message].filter((value): value is string => Boolean(value)).join(': ');
-  const metadata = [scope ? 'scope=' + scope : null, retryable === null ? null : 'retryable=' + retryable].filter((value): value is string => Boolean(value)).join(', ');
-  if (head || metadata) return (head || 'native error') + (metadata ? ' (' + metadata + ')' : '');
+  const details = parseMaterialTaskError(error);
+  if (details) {
+    const head = [details.code, details.message].filter((value): value is string => Boolean(value)).join(': ');
+    const metadata = [details.scope ? 'scope=' + details.scope : null, details.retryable === null ? null : 'retryable=' + details.retryable].filter((value): value is string => Boolean(value)).join(', ');
+    return (head || 'native error') + (metadata ? ' (' + metadata + ')' : '');
+  }
   try {
     const serialized = JSON.stringify(error);
     if (serialized !== undefined) return serialized;
@@ -287,7 +285,7 @@ export function createNativeMaterialImportAdapter(onAccepted?: (result: Material
         return result;
       } catch (error) {
         const message = formatNativeError(error);
-        return {status: 'error', message: '资料导入未完成：' + message};
+        return {status: 'error', message: '资料导入未完成：' + message, error: parseMaterialTaskError(error)};
       }
     },
   };
